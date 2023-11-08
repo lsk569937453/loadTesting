@@ -1,72 +1,67 @@
-use futures::{stream, StreamExt};
-use hyper::client::HttpConnector;
-use hyper::{body::HttpBody as _, Client, Uri};
-use std::str::FromStr;
-use std::sync::atomic::AtomicI32;
-use std::sync::Arc;
-use tokio::signal::windows::ctrl_c;
-use tokio::sync::Mutex;
+use std::collections::HashMap;
 
-#[macro_use]
-extern crate anyhow;
-use std::env;
-use tokio::sync::mpsc;
-use tokio::task::JoinSet;
-#[tokio::main]
-async fn main() -> Result<(), anyhow::Error> {
-    let url = String::from("http://localhost:8080");
-    let connections: u16 = 10;
-    do_request(url.clone(), connections).await;
-    Ok(())
-}
-async fn do_request(url: String, connections: u16) -> Result<(), anyhow::Error> {
-    let client = Client::new();
-    let timer = tokio::time::Instant::now();
+use hyper::body::{Body as HyperBody, HttpBody as _};
+use hyper::Client as HyperClient;
 
-    let counter = Arc::new(AtomicI32::new(0));
-    let mut task_list = vec![];
-    for _ in 0..connections {
-        let clone_url = url.clone();
-        let clone_counter = counter.clone();
-        let clone_client = client.clone();
-        let task =
-            tokio::spawn(async move { submit_task(clone_counter, clone_client, clone_url).await });
-        task_list.push(task);
-    }
-    let mut signal = ctrl_c()?;
-    signal.recv().await;
+use mlua::{chunk, ExternalResult, Lua, Result, UserData, UserDataMethods};
 
-    println!("task has been canceled!");
-    task_list.iter().for_each(|item| item.abort());
-    let success_count = counter.load(std::sync::atomic::Ordering::Relaxed).clone();
+struct BodyReader(HyperBody);
 
-    let time_cost: u128 = timer.elapsed().as_millis();
-
-    let base: i32 = 10;
-
-    let rps = base.pow(3) * success_count / (time_cost as i32);
-
-    println!(
-        "Actual time {:.2} million second, RPS {}/s,count is {}",
-        time_cost, rps, success_count
-    );
-    Ok(())
-}
-async fn submit_task(counter: Arc<AtomicI32>, client: Client<HttpConnector>, url: String) {
-    let clone_client = client.clone();
-    let clone_url: String = url.clone();
-    loop {
-        let cloned_client1 = clone_client.clone();
-        let clone_url1 = clone_url.parse::<hyper::Uri>().unwrap();
-        let result = cloned_client1
-            .get(clone_url1)
-            .await
-            .map_err(|e| anyhow!("Request error ,the error is {},", e));
-
-        if let Ok(response) = result {
-            if response.status().is_success() {
-                counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+impl UserData for BodyReader {
+    fn add_methods<'lua, M: UserDataMethods<'lua, Self>>(methods: &mut M) {
+        methods.add_async_method_mut("read", |lua, reader, ()| async move {
+            if let Some(bytes) = reader.0.data().await {
+                let bytes = bytes.into_lua_err()?;
+                return Some(lua.create_string(&bytes)).transpose();
             }
-        }
+            Ok(None)
+        });
     }
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let lua = Lua::new();
+
+    let fetch_url = lua.create_async_function(|lua, uri: String| async move {
+        let client = HyperClient::new();
+        let uri = uri.parse().into_lua_err()?;
+        let resp = client.get(uri).await.into_lua_err()?;
+
+        let lua_resp = lua.create_table()?;
+        lua_resp.set("status", resp.status().as_u16())?;
+
+        let mut headers = HashMap::new();
+        for (key, value) in resp.headers() {
+            headers
+                .entry(key.as_str())
+                .or_insert(Vec::new())
+                .push(value.to_str().into_lua_err()?);
+        }
+
+        lua_resp.set("headers", headers)?;
+        lua_resp.set("body", BodyReader(resp.into_body()))?;
+
+        Ok(lua_resp)
+    })?;
+
+    let f = lua
+        .load(chunk! {
+            local res = $fetch_url(...)
+            print("status: "..res.status)
+            for key, vals in pairs(res.headers) do
+                for _, val in ipairs(vals) do
+                    print(key..": "..val)
+                end
+            end
+            repeat
+                local body = res.body:read()
+                if body then
+                    print(body)
+                end
+            until not body
+        })
+        .into_function()?;
+
+    f.call_async("http://httpbin.org/ip").await
 }
