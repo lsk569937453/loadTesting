@@ -1,67 +1,117 @@
-use std::collections::HashMap;
+use futures::{stream, StreamExt};
+use http_body_util::Empty;
+use hyper::Request;
+use hyper_util::client::legacy::{connect::HttpConnector, Client};
+use std::str::FromStr;
+use std::sync::atomic::AtomicI32;
+use std::sync::Arc;
+use tokio::signal::ctrl_c;
+use tokio::sync::Mutex;
+#[macro_use]
+extern crate anyhow;
+use clap::Parser;
+use http_body_util::Full;
+use hyper::body::Bytes;
+use hyper_rustls::ConfigBuilderExt;
+use hyper_rustls::HttpsConnector;
+use hyper_util::rt::TokioExecutor;
+use rustls::RootCertStore;
+use std::env;
+use tokio::sync::mpsc;
+use tokio::task::JoinSet;
+use tokio::time::{sleep, Duration};
 
-use hyper::body::{Body as HyperBody, HttpBody as _};
-use hyper::Client as HyperClient;
-
-use mlua::{chunk, ExternalResult, Lua, Result, UserData, UserDataMethods};
-
-struct BodyReader(HyperBody);
-
-impl UserData for BodyReader {
-    fn add_methods<'lua, M: UserDataMethods<'lua, Self>>(methods: &mut M) {
-        methods.add_async_method_mut("read", |lua, reader, ()| async move {
-            if let Some(bytes) = reader.0.data().await {
-                let bytes = bytes.into_lua_err()?;
-                return Some(lua.create_string(&bytes)).transpose();
-            }
-            Ok(None)
-        });
-    }
+#[derive(Parser)]
+#[command(author, version, about, long_about)]
+struct Cli {
+    /// The request url,like http://www.google.com
+    url: String,
+    /// The thread count.
+    #[arg(short = 't', long, value_name = "Threads count", default_value_t = 20)]
+    threads: u16,
+    /// The thread count.
+    #[arg(
+        short = 's',
+        long,
+        value_name = "The running seconds",
+        default_value_t = 3
+    )]
+    sleep_seconds: u64,
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
-    let lua = Lua::new();
+async fn main() -> Result<(), anyhow::Error> {
+    let cli: Cli = Cli::parse();
+    let _ = do_request(cli.url, cli.threads, cli.sleep_seconds).await;
+    Ok(())
+}
+async fn do_request(
+    url: String,
+    connections: u16,
+    sleep_seconds: u64,
+) -> Result<(), anyhow::Error> {
+    let tls = rustls::ClientConfig::builder()
+        .with_native_roots()?
+        .with_no_client_auth();
+    let https = hyper_rustls::HttpsConnectorBuilder::new()
+        .with_tls_config(tls)
+        .https_or_http()
+        .enable_http1()
+        .build();
 
-    let fetch_url = lua.create_async_function(|lua, uri: String| async move {
-        let client = HyperClient::new();
-        let uri = uri.parse().into_lua_err()?;
-        let resp = client.get(uri).await.into_lua_err()?;
+    let timer = tokio::time::Instant::now();
+    let client = Client::builder(hyper_util::rt::TokioExecutor::new()).build(https.clone());
 
-        let lua_resp = lua.create_table()?;
-        lua_resp.set("status", resp.status().as_u16())?;
+    let counter = Arc::new(AtomicI32::new(0));
+    let mut task_list = vec![];
+    for _ in 0..connections {
+        let clone_url = url.clone();
+        let clone_counter = counter.clone();
+        let clone_client = client.clone();
+        let task =
+            tokio::spawn(async move { submit_task(clone_counter, clone_client, clone_url).await });
+        task_list.push(task);
+    }
+    drop(client);
+    let _ = sleep(Duration::from_secs(sleep_seconds)).await;
 
-        let mut headers = HashMap::new();
-        for (key, value) in resp.headers() {
-            headers
-                .entry(key.as_str())
-                .or_insert(Vec::new())
-                .push(value.to_str().into_lua_err()?);
+    task_list.iter().for_each(|item| item.abort());
+    let success_count = counter.load(std::sync::atomic::Ordering::Relaxed).clone();
+
+    let time_cost: u128 = timer.elapsed().as_millis();
+
+    let base: i32 = 10;
+
+    let rps = base.pow(3) * success_count / (time_cost as i32);
+
+    println!(
+        "Actual time {:.2} million second, RPS {}/s,count is {}",
+        time_cost, rps, success_count
+    );
+    Ok(())
+}
+async fn submit_task(
+    counter: Arc<AtomicI32>,
+    client: Client<HttpsConnector<HttpConnector>, Full<Bytes>>,
+    url: String,
+) {
+    let clone_client = client.clone();
+    let clone_url: String = url.clone();
+    loop {
+        let cloned_client1 = clone_client.clone();
+        let clone_url1 = clone_url.parse::<hyper::Uri>().unwrap();
+        let result = cloned_client1
+            .get(clone_url1)
+            .await
+            .map_err(|e| anyhow!("Terst!"));
+
+        if let Ok(response) = result {
+            if response.status().is_success() {
+                tokio::spawn(statistic(counter.clone()));
+            }
         }
-
-        lua_resp.set("headers", headers)?;
-        lua_resp.set("body", BodyReader(resp.into_body()))?;
-
-        Ok(lua_resp)
-    })?;
-
-    let f = lua
-        .load(chunk! {
-            local res = $fetch_url(...)
-            print("status: "..res.status)
-            for key, vals in pairs(res.headers) do
-                for _, val in ipairs(vals) do
-                    print(key..": "..val)
-                end
-            end
-            repeat
-                local body = res.body:read()
-                if body then
-                    print(body)
-                end
-            until not body
-        })
-        .into_function()?;
-
-    f.call_async("http://httpbin.org/ip").await
+    }
+}
+async fn statistic(counter: Arc<AtomicI32>) {
+    counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
