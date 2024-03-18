@@ -29,7 +29,7 @@ struct Cli {
     /// The thread count.
     #[arg(short = 't', long, value_name = "Threads count", default_value_t = 20)]
     threads: u16,
-    /// The thread count.
+    /// The running seconds for the testing tools.
     #[arg(
         short = 's',
         long,
