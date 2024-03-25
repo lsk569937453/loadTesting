@@ -34,7 +34,7 @@ struct Cli {
         short = 's',
         long,
         value_name = "The running seconds",
-        default_value_t = 3
+        default_value_t = 5
     )]
     sleep_seconds: u64,
 }
