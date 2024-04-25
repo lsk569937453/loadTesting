@@ -548,6 +548,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "itertools"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba291022dbbd398a455acf126c1e341954079855bc60dfdda641363bd6922569"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -577,6 +586,7 @@ dependencies = [
  "hyper",
  "hyper-rustls",
  "hyper-util",
+ "itertools 0.12.1",
  "log",
  "mlua",
  "rustls",
@@ -678,7 +688,7 @@ version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0f359220f24e6452dd82a3f50d7242d4aab822b5594798048e953d7a9e0314c6"
 dependencies = [
- "itertools",
+ "itertools 0.11.0",
  "once_cell",
  "proc-macro-error",
  "proc-macro2",
