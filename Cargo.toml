@@ -21,3 +21,4 @@ futures = "0.3.29"
 mlua = { version = "0.9.1", features = ["lua54", "vendored","async","macros"] }
 hyper-rustls = "0.26.0"
 rustls = { version = "0.22.1"  ,features = [ "logging" ]}
+itertools = "0.12.1"
