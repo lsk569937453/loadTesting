@@ -3,7 +3,7 @@ use itertools::Itertools;
 use std::collections::HashMap;
 
 pub struct StatisticList {
-    pub response_list: Vec<ResponseStatistic>,
+    pub response_list: Vec<Result<ResponseStatistic, anyhow::Error>>,
 }
 pub struct ResponseStatistic {
     pub time_cost: u128,
@@ -22,23 +22,30 @@ impl StatisticList {
         let mut hashmap = HashMap::new();
 
         let mut total_time_cost = 0;
-        for item in &self.response_list {
-            let time_cost = item.time_cost;
-            let status_code = item.staus_code;
-            let content_len = item.content_length;
-            if time_cost > slow {
-                slow = time_cost;
+        for result in &self.response_list {
+            match result {
+                Ok(item) => {
+                    let time_cost = item.time_cost;
+                    let status_code = item.staus_code;
+                    let content_len = item.content_length;
+                    if time_cost > slow {
+                        slow = time_cost;
+                    }
+                    if time_cost < fast {
+                        fast = time_cost;
+                    }
+                    total_time_cost += time_cost;
+                    total_data += content_len;
+                    size_per_request = content_len;
+                    hashmap
+                        .entry(status_code)
+                        .and_modify(|counter| *counter += 1)
+                        .or_insert(1);
+                }
+                Err(e) => {
+                    println!("{}", e);
+                }
             }
-            if time_cost < fast {
-                fast = time_cost;
-            }
-            total_time_cost += time_cost;
-            total_data += content_len;
-            size_per_request = content_len;
-            hashmap
-                .entry(status_code)
-                .and_modify(|counter| *counter += 1)
-                .or_insert(1);
         }
         let mapdata = hashmap
             .iter()
