@@ -21,21 +21,23 @@ use hyper::body::Bytes;
 use hyper::header::HeaderValue;
 use hyper::header::CONTENT_LENGTH;
 use hyper::Response;
+use hyper::Uri;
 use hyper_rustls::ConfigBuilderExt;
 use hyper_rustls::HttpsConnector;
 use hyper_util::rt::TokioExecutor;
+use hyper_util::rt::TokioIo;
 use rustls::crypto::ring::default_provider;
 use rustls::crypto::ring::DEFAULT_CIPHER_SUITES;
 use rustls::crypto::CryptoProvider;
 use rustls::ClientConfig;
 use rustls::RootCertStore;
 use std::env;
+use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 use tokio::time::{sleep, Duration};
 use tracing;
-
 use tracing::Level;
 #[derive(Parser)]
 #[command(author, version, about, long_about)]
@@ -128,15 +130,30 @@ async fn submit_task(
     shared_list: Arc<Mutex<StatisticList>>,
     client: Client<HttpsConnector<HttpConnector>, Full<Bytes>>,
     url: String,
-) {
+) -> Result<(), anyhow::Error> {
     let clone_client = client.clone();
     let clone_url: String = url.clone();
+    let uri: Uri = clone_url.parse().map_err(|e| anyhow!("{}", e))?;
+    let port = uri.port_u16().unwrap_or(80);
+
+    let addr = format!("{}:{}", uri.host().unwrap(), port);
+    let stream = TcpStream::connect(addr).await?;
+    stream.set_linger(Some(Duration::from_secs(50)))?;
+
+    let io = TokioIo::new(stream);
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await?;
+    tokio::task::spawn(async move {
+        if let Err(err) = conn.await {
+            println!("Connection failed: {:?}", err);
+        }
+    });
+    let req = Request::builder().uri(url).body(Empty::<Bytes>::new())?;
     loop {
         let now = Instant::now();
 
         let cloned_client1 = clone_client.clone();
         let clone_url1 = clone_url.parse::<hyper::Uri>().unwrap();
-        let result = cloned_client1.get(clone_url1).await.map_err(|e| {
+        let result = sender.send_request(req.clone()).await.map_err(|e| {
             if let Some(err) = e.source() {
                 anyhow!("{}", err)
             } else {
@@ -153,6 +170,7 @@ async fn submit_task(
             }
         }
     }
+    Ok(())
 }
 async fn statistic(
     shared_list: Arc<Mutex<StatisticList>>,
