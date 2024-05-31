@@ -6,6 +6,7 @@ use hyper::Request;
 use hyper_util::client::legacy::{connect::HttpConnector, Client};
 use output::report::ResponseStatistic;
 use output::report::StatisticList;
+use std::error::Error;
 use std::str::FromStr;
 use std::sync::atomic::AtomicI32;
 use std::sync::Arc;
@@ -23,12 +24,19 @@ use hyper::Response;
 use hyper_rustls::ConfigBuilderExt;
 use hyper_rustls::HttpsConnector;
 use hyper_util::rt::TokioExecutor;
+use rustls::crypto::ring::default_provider;
+use rustls::crypto::ring::DEFAULT_CIPHER_SUITES;
+use rustls::crypto::CryptoProvider;
+use rustls::ClientConfig;
 use rustls::RootCertStore;
 use std::env;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 use tokio::time::{sleep, Duration};
+use tracing;
+
+use tracing::Level;
 #[derive(Parser)]
 #[command(author, version, about, long_about)]
 struct Cli {
@@ -55,8 +63,15 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
+    let subscriber = tracing_subscriber::FmtSubscriber::builder()
+        .with_max_level(Level::INFO)
+        .finish();
+
+    tracing::subscriber::set_global_default(subscriber).unwrap();
     let cli: Cli = Cli::parse();
-    let _ = do_request(cli.url, cli.threads, cli.sleep_seconds).await;
+    if let Err(e) = do_request(cli.url, cli.threads, cli.sleep_seconds).await {
+        println!("{}", e);
+    }
     Ok(())
 }
 async fn do_request(
@@ -64,11 +79,21 @@ async fn do_request(
     connections: u16,
     sleep_seconds: u64,
 ) -> Result<(), anyhow::Error> {
-    let tls = rustls::ClientConfig::builder()
-        .with_native_roots()?
-        .with_no_client_auth();
+    let mut root_store = RootCertStore::empty();
+    root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let versions = rustls::DEFAULT_VERSIONS.to_vec();
+    let mut tls_config = ClientConfig::builder_with_provider(
+        CryptoProvider {
+            cipher_suites: DEFAULT_CIPHER_SUITES.to_vec(),
+            ..default_provider()
+        }
+        .into(),
+    )
+    .with_protocol_versions(&versions)?
+    .with_root_certificates(root_store)
+    .with_no_client_auth();
     let https = hyper_rustls::HttpsConnectorBuilder::new()
-        .with_tls_config(tls)
+        .with_tls_config(tls_config)
         .https_or_http()
         .enable_http1()
         .build();
@@ -95,6 +120,7 @@ async fn do_request(
     let total_cost = now.elapsed().as_millis();
     task_list.iter().for_each(|item| item.abort());
     let list = shared_list.lock().await;
+    println!("len is :{}", list.response_list.len());
     list.print(total_cost);
     Ok(())
 }
@@ -110,36 +136,53 @@ async fn submit_task(
 
         let cloned_client1 = clone_client.clone();
         let clone_url1 = clone_url.parse::<hyper::Uri>().unwrap();
-        let result = cloned_client1
-            .get(clone_url1)
-            .await
-            .map_err(|e| anyhow!("Terst!"));
+        let result = cloned_client1.get(clone_url1).await.map_err(|e| {
+            if let Some(err) = e.source() {
+                anyhow!("{}", err)
+            } else {
+                anyhow!(e)
+            }
+        });
         let elapsed = now.elapsed().as_millis();
-        if let Ok(r) = result {
-            tokio::spawn(statistic(shared_list.clone(), elapsed, r));
+        match result {
+            Ok(res) => {
+                tokio::spawn(statistic(shared_list.clone(), elapsed, Ok(res)));
+            }
+            Err(e) => {
+                tokio::spawn(statistic(shared_list.clone(), elapsed, Err(anyhow!(e))));
+            }
         }
     }
 }
 async fn statistic(
     shared_list: Arc<Mutex<StatisticList>>,
     time_cost: u128,
-    res: Response<Incoming>,
+    result: Result<Response<Incoming>, anyhow::Error>,
 ) {
-    let default_content_length = HeaderValue::from_static("0");
-    let content_len_header = res
-        .headers()
-        .get(CONTENT_LENGTH)
-        .unwrap_or(&default_content_length);
-    let content_len = content_len_header
-        .to_str()
-        .unwrap_or("0")
-        .parse::<u64>()
-        .unwrap_or(0);
-    let mut list = shared_list.lock().await;
-    let response_statistic = ResponseStatistic {
-        time_cost: time_cost,
-        staus_code: res.status().as_u16(),
-        content_length: content_len,
+    match result {
+        Ok(res) => {
+            let default_content_length = HeaderValue::from_static("0");
+            let content_len_header = res
+                .headers()
+                .get(CONTENT_LENGTH)
+                .unwrap_or(&default_content_length);
+            let content_len = content_len_header
+                .to_str()
+                .unwrap_or("0")
+                .parse::<u64>()
+                .unwrap_or(0);
+            let mut list = shared_list.lock().await;
+            let response_statistic = ResponseStatistic {
+                time_cost: time_cost,
+                staus_code: res.status().as_u16(),
+                content_length: content_len,
+            };
+            list.response_list.push(Ok(response_statistic));
+        }
+        Err(e) => {
+            let mut list = shared_list.lock().await;
+
+            list.response_list.push(Err(anyhow!("{}", e)));
+        }
     };
-    list.response_list.push(response_statistic);
 }
