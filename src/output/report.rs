@@ -20,6 +20,7 @@ impl StatisticList {
         let mut size_per_request = 0;
 
         let mut hashmap = HashMap::new();
+        let mut error_map = HashMap::new();
 
         let mut total_time_cost = 0;
         for result in &self.response_list {
@@ -43,11 +44,18 @@ impl StatisticList {
                         .or_insert(1);
                 }
                 Err(e) => {
-                    println!("{}", e);
+                    error_map
+                        .entry(e.to_string())
+                        .and_modify(|counter| *counter += 1)
+                        .or_insert(1);
                 }
             }
         }
         let mapdata = hashmap
+            .iter()
+            .map(|(k, v)| format!("[{}] {} responses", k, v))
+            .join(", ");
+        let err_message = error_map
             .iter()
             .map(|(k, v)| format!("[{}] {} responses", k, v))
             .join(", ");
@@ -68,6 +76,8 @@ Summary:
         
 Status code distribution:
     {mapdata}
+Error Message:
+    {err_message}
 "#
         );
         println!("{}", format_str);

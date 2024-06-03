@@ -122,7 +122,6 @@ async fn do_request(
     let total_cost = now.elapsed().as_millis();
     task_list.iter().for_each(|item| item.abort());
     let list = shared_list.lock().await;
-    println!("len is :{}", list.response_list.len());
     list.print(total_cost);
     Ok(())
 }
