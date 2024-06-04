@@ -1,17 +1,9 @@
-use futures::TryFutureExt;
-use futures::{stream, StreamExt};
-use http_body_util::BodyExt;
-use http_body_util::Empty;
 use hyper::body::Incoming;
-use hyper::Request;
 use hyper_util::client::legacy::{connect::HttpConnector, Client};
 use output::report::ResponseStatistic;
 use output::report::StatisticList;
 use std::error::Error;
-use std::str::FromStr;
-use std::sync::atomic::AtomicI32;
 use std::sync::Arc;
-use tokio::signal::ctrl_c;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::Mutex;
 mod output;
@@ -23,22 +15,17 @@ use hyper::body::Bytes;
 use hyper::header::HeaderValue;
 use hyper::header::CONTENT_LENGTH;
 use hyper::Response;
-use hyper::Uri;
-use hyper_rustls::ConfigBuilderExt;
 use hyper_rustls::HttpsConnector;
-use hyper_util::rt::TokioExecutor;
-use tokio::sync::mpsc::channel;
 
-use hyper_util::rt::TokioIo;
 use rustls::crypto::ring::default_provider;
 use rustls::crypto::ring::DEFAULT_CIPHER_SUITES;
 use rustls::crypto::CryptoProvider;
 use rustls::ClientConfig;
 use rustls::RootCertStore;
-use std::env;
-use tokio::net::TcpStream;
+
 use tokio::sync::broadcast;
-use tokio::sync::mpsc;
+use tokio::time::timeout;
+
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 use tokio::time::{sleep, Duration};
@@ -90,7 +77,7 @@ async fn do_request(
     let mut root_store = RootCertStore::empty();
     root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     let versions = rustls::DEFAULT_VERSIONS.to_vec();
-    let mut tls_config = ClientConfig::builder_with_provider(
+    let tls_config = ClientConfig::builder_with_provider(
         CryptoProvider {
             cipher_suites: DEFAULT_CIPHER_SUITES.to_vec(),
             ..default_provider()
@@ -129,7 +116,12 @@ async fn do_request(
     sender.send(())?;
 
     let total_cost = now.elapsed().as_millis();
-    while let Some(_) = task_list.join_next().await {}
+    while let Some(r) = task_list.join_next().await {
+        if let Ok(Ok(_)) = r {
+        } else {
+            println!("cause errppr");
+        }
+    }
     drop(client);
 
     let list = shared_list.lock().await;
@@ -144,25 +136,21 @@ async fn submit_task(
 ) -> Result<(), anyhow::Error> {
     let clone_client = client.clone();
     let clone_url: String = url.clone();
-    let uri: Uri = clone_url.parse().map_err(|e| anyhow!("{}", e))?;
-    let port = uri.port_u16().unwrap_or(80);
+    let clone_url1 = clone_url.parse::<hyper::Uri>().unwrap();
 
-    let addr = format!("{}:{}", uri.host().unwrap(), port);
-    let stream = TcpStream::connect(addr).await?;
-    stream.set_linger(Some(Duration::from_secs(50)))?;
-
-    let req = Request::builder().uri(url).body(Empty::<Bytes>::new())?;
     loop {
         let now = Instant::now();
         let cloned_client1 = clone_client.clone();
-        let clone_url1 = clone_url.parse::<hyper::Uri>().unwrap();
-        let result = cloned_client1.get(clone_url1).await.map_err(|e| {
-            if let Some(err) = e.source() {
-                anyhow!("{}", err)
-            } else {
-                anyhow!(e)
-            }
-        });
+        let current = clone_url1.clone();
+        let result = timeout(Duration::from_secs(1), cloned_client1.get(current))
+            .await?
+            .map_err(|e| {
+                if let Some(err) = e.source() {
+                    anyhow!("{}", err)
+                } else {
+                    anyhow!(e)
+                }
+            });
         let elapsed = now.elapsed().as_millis();
         match result {
             Ok(res) => {
