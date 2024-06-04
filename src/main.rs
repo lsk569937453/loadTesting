@@ -1,3 +1,4 @@
+use futures::TryFutureExt;
 use futures::{stream, StreamExt};
 use http_body_util::BodyExt;
 use http_body_util::Empty;
@@ -11,6 +12,7 @@ use std::str::FromStr;
 use std::sync::atomic::AtomicI32;
 use std::sync::Arc;
 use tokio::signal::ctrl_c;
+use tokio::sync::broadcast::Receiver;
 use tokio::sync::Mutex;
 mod output;
 #[macro_use]
@@ -25,6 +27,8 @@ use hyper::Uri;
 use hyper_rustls::ConfigBuilderExt;
 use hyper_rustls::HttpsConnector;
 use hyper_util::rt::TokioExecutor;
+use tokio::sync::mpsc::channel;
+
 use hyper_util::rt::TokioIo;
 use rustls::crypto::ring::default_provider;
 use rustls::crypto::ring::DEFAULT_CIPHER_SUITES;
@@ -33,12 +37,14 @@ use rustls::ClientConfig;
 use rustls::RootCertStore;
 use std::env;
 use tokio::net::TcpStream;
+use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 use tokio::time::{sleep, Duration};
 use tracing;
 use tracing::Level;
+
 #[derive(Parser)]
 #[command(author, version, about, long_about)]
 struct Cli {
@@ -106,19 +112,24 @@ async fn do_request(
     let shared_list: Arc<Mutex<StatisticList>> = Arc::new(Mutex::new(StatisticList {
         response_list: vec![],
     }));
+    let (sender, mut receiver) = broadcast::channel(16);
+
     let now = Instant::now();
     for _ in 0..connections {
+        let mut rx2: Receiver<()> = sender.subscribe();
+
         let cloned_list = shared_list.clone();
         let clone_url = url.clone();
         let clone_client = client.clone();
-        let task =
-            tokio::spawn(
-                async move { submit_task(cloned_list.clone(), clone_client, clone_url).await },
-            );
+        let task = tokio::spawn(async move {
+            submit_task(cloned_list.clone(), clone_client, clone_url, rx2).await
+        });
         task_list.push(task);
     }
-    drop(client);
     let _ = sleep(Duration::from_secs(sleep_seconds)).await;
+    drop(client);
+
+    sender.send(())?;
     let total_cost = now.elapsed().as_millis();
     task_list.iter().for_each(|item| item.abort());
     let list = shared_list.lock().await;
@@ -129,6 +140,7 @@ async fn submit_task(
     shared_list: Arc<Mutex<StatisticList>>,
     client: Client<HttpsConnector<HttpConnector>, Full<Bytes>>,
     url: String,
+    mut receiver: Receiver<()>,
 ) -> Result<(), anyhow::Error> {
     let clone_client = client.clone();
     let clone_url: String = url.clone();
@@ -139,35 +151,33 @@ async fn submit_task(
     let stream = TcpStream::connect(addr).await?;
     stream.set_linger(Some(Duration::from_secs(50)))?;
 
-    let io = TokioIo::new(stream);
-    let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await?;
-    tokio::task::spawn(async move {
-        if let Err(err) = conn.await {
-            println!("Connection failed: {:?}", err);
-        }
-    });
     let req = Request::builder().uri(url).body(Empty::<Bytes>::new())?;
     loop {
         let now = Instant::now();
-
         let cloned_client1 = clone_client.clone();
         let clone_url1 = clone_url.parse::<hyper::Uri>().unwrap();
-        let result = sender.send_request(req.clone()).await.map_err(|e| {
+        tokio::select! {
+            _ = receiver.recv() => {
+                return Ok(());
+            }
+            result = cloned_client1.get(clone_url1).map_err(|e| {
             if let Some(err) = e.source() {
                 anyhow!("{}", err)
             } else {
                 anyhow!(e)
             }
-        });
-        let elapsed = now.elapsed().as_millis();
-        match result {
+        })=> {
+            let elapsed = now.elapsed().as_millis();
+            match result {
             Ok(res) => {
                 tokio::spawn(statistic(shared_list.clone(), elapsed, Ok(res)));
             }
             Err(e) => {
                 tokio::spawn(statistic(shared_list.clone(), elapsed, Err(anyhow!(e))));
             }
-        }
+            }
+            }
+        };
     }
     Ok(())
 }
