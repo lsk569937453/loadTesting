@@ -108,30 +108,30 @@ async fn do_request(
 
     let client = Client::builder(hyper_util::rt::TokioExecutor::new()).build(https.clone());
 
-    let mut task_list = vec![];
+    let mut task_list = JoinSet::new();
     let shared_list: Arc<Mutex<StatisticList>> = Arc::new(Mutex::new(StatisticList {
         response_list: vec![],
     }));
-    let (sender, mut receiver) = broadcast::channel(16);
+    let (sender, _) = broadcast::channel(16);
 
     let now = Instant::now();
     for _ in 0..connections {
-        let mut rx2: Receiver<()> = sender.subscribe();
+        let rx2: Receiver<()> = sender.subscribe();
 
         let cloned_list = shared_list.clone();
         let clone_url = url.clone();
         let clone_client = client.clone();
-        let task = tokio::spawn(async move {
+        task_list.spawn(async move {
             submit_task(cloned_list.clone(), clone_client, clone_url, rx2).await
         });
-        task_list.push(task);
     }
     let _ = sleep(Duration::from_secs(sleep_seconds)).await;
+    sender.send(())?;
+
+    let total_cost = now.elapsed().as_millis();
+    while let Some(_) = task_list.join_next().await {}
     drop(client);
 
-    sender.send(())?;
-    let total_cost = now.elapsed().as_millis();
-    task_list.iter().for_each(|item| item.abort());
     let list = shared_list.lock().await;
     list.print(total_cost);
     Ok(())
@@ -156,29 +156,31 @@ async fn submit_task(
         let now = Instant::now();
         let cloned_client1 = clone_client.clone();
         let clone_url1 = clone_url.parse::<hyper::Uri>().unwrap();
-        tokio::select! {
-            _ = receiver.recv() => {
-                return Ok(());
-            }
-            result = cloned_client1.get(clone_url1).map_err(|e| {
+        let result = cloned_client1.get(clone_url1).await.map_err(|e| {
             if let Some(err) = e.source() {
                 anyhow!("{}", err)
             } else {
                 anyhow!(e)
             }
-        })=> {
-            let elapsed = now.elapsed().as_millis();
-            match result {
+        });
+        let elapsed = now.elapsed().as_millis();
+        match result {
             Ok(res) => {
                 tokio::spawn(statistic(shared_list.clone(), elapsed, Ok(res)));
             }
             Err(e) => {
                 tokio::spawn(statistic(shared_list.clone(), elapsed, Err(anyhow!(e))));
             }
+        }
+        tokio::select! {
+            biased;
+            _ = receiver.recv() => {
+                return Ok(());
             }
-            }
-        };
+            _=async{}=>{}
+        }
     }
+
     Ok(())
 }
 async fn statistic(
