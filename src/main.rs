@@ -26,8 +26,12 @@ use rustls::RootCertStore;
 use tokio::sync::broadcast;
 use tokio::time::timeout;
 
+use hyper::header::HeaderName;
+use hyper::header::CONTENT_TYPE;
 use hyper::http::request::Parts;
+use hyper::HeaderMap;
 use hyper::Request;
+use std::str::FromStr;
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 use tokio::time::{sleep, Duration};
@@ -58,6 +62,9 @@ struct Cli {
     /// The http headers.
     #[arg(short = 'H', long = "header", value_name = "header/@file")]
     pub headers: Vec<String>,
+    /// HTTP POST data.
+    #[arg(short = 'd', long = "data", value_name = "data")]
+    pub body_option: Option<String>,
 }
 
 #[tokio::main]
@@ -94,10 +101,30 @@ async fn do_request(cli: Cli) -> Result<(), anyhow::Error> {
         .build();
 
     let client = Client::builder(hyper_util::rt::TokioExecutor::new()).build(https.clone());
-    let mut req_builder = Request::builder().uri(cli.url.clone());
+    let mut method = String::from("GET");
+    let mut content_type_option = None;
+    if cli.body_option.is_some() {
+        method = String::from("POST");
+        content_type_option = Some(String::from("application/x-www-form-urlencoded"));
+    }
+    let mut req_builder = Request::builder()
+        .method(method.as_str())
+        .uri(cli.url.clone());
+    let mut header_map = HeaderMap::new();
+    if let Some(content_type) = content_type_option {
+        header_map.insert(CONTENT_TYPE, HeaderValue::from_str(&content_type)?);
+    }
     for x in cli.headers.clone() {
         let split: Vec<String> = x.splitn(2, ':').map(|s| s.to_string()).collect();
-        req_builder = req_builder.header(&split[0], &split[1]);
+        let key = &split[0];
+        let value = &split[1];
+        header_map.insert(
+            HeaderName::from_str(key.as_str())?,
+            HeaderValue::from_str(value)?,
+        );
+    }
+    for (key, val) in header_map {
+        req_builder = req_builder.header(key.ok_or(anyhow!(""))?, val);
     }
     let req = req_builder.body(Full::new(Bytes::new()))?;
 
