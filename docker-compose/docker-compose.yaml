@@ -1,0 +1,41 @@
+version: '3.9'
+
+services:
+  test:
+    image: demisto/rakyll-hey:1.0.0.44140
+    container_name: hey
+    tty: true
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 8192M
+
+  kt:
+    image: lsk569937453/kt:test
+    container_name: kt
+    tty: true
+    deploy:
+      resources:
+        limits:
+          cpus: "20.0"
+          memory: 8192M
+  rcurl:
+    image: ghcr.io/lsk569937453/rcurl:0.0.25
+    container_name: rcurl
+    tty: true
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 8192M
+  backend:
+    image: ghcr.io/lsk569937453/echo-server:0.0.3
+    container_name: backend
+    ports:
+      - "9394:8080"
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 8192M

@@ -1,6 +1,4 @@
-use core::time;
 use itertools::Itertools;
-use rustls::crypto::hash::Hash;
 use std::collections::{HashMap, HashSet};
 
 pub struct StatisticList {
@@ -56,9 +54,10 @@ impl StatisticList {
             .iter()
             .map(|(k, v)| format!("[{}] {} responses", k, v))
             .join(", ");
-        let error_message = error_map
+
+        let err_message = error_map
             .iter()
-            .map(|(k, v)| format!("{} resquest:[{}]", v, k))
+            .map(|(k, v)| format!("[{}] {} responses", k, v))
             .join(", ");
 
         average = total_time_cost / self.response_list.len() as u128;
@@ -78,7 +77,7 @@ Summary:
 Status code distribution:
     {mapdata}
 Error Message:
-    {error_message}
+    {err_message}
 "#
         );
         println!("{}", format_str);

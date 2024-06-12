@@ -1,16 +1,10 @@
-use futures::{stream, StreamExt};
-use http_body_util::BodyExt;
-use http_body_util::Empty;
 use hyper::body::Incoming;
-use hyper::Request;
 use hyper_util::client::legacy::{connect::HttpConnector, Client};
 use output::report::ResponseStatistic;
 use output::report::StatisticList;
 use std::error::Error;
-use std::str::FromStr;
-use std::sync::atomic::AtomicI32;
 use std::sync::Arc;
-use tokio::signal::ctrl_c;
+use tokio::sync::broadcast::Receiver;
 use tokio::sync::Mutex;
 mod output;
 #[macro_use]
@@ -20,22 +14,28 @@ use http_body_util::Full;
 use hyper::body::Bytes;
 use hyper::header::HeaderValue;
 use hyper::header::CONTENT_LENGTH;
+use hyper::Method;
 use hyper::Response;
-use hyper_rustls::ConfigBuilderExt;
 use hyper_rustls::HttpsConnector;
-use hyper_util::rt::TokioExecutor;
 use rustls::crypto::ring::default_provider;
 use rustls::crypto::ring::DEFAULT_CIPHER_SUITES;
 use rustls::crypto::CryptoProvider;
 use rustls::ClientConfig;
 use rustls::RootCertStore;
-use std::env;
-use tokio::sync::mpsc;
+
+use tokio::sync::broadcast;
+use tokio::time::timeout;
+
+use hyper::header::HeaderName;
+use hyper::header::CONTENT_TYPE;
+use hyper::http::request::Parts;
+use hyper::HeaderMap;
+use hyper::Request;
+use std::str::FromStr;
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 use tokio::time::{sleep, Duration};
 use tracing;
-
 use tracing::Level;
 #[derive(Parser)]
 #[command(author, version, about, long_about)]
@@ -59,6 +59,12 @@ struct Cli {
         default_value_t = 5
     )]
     sleep_seconds: u64,
+    /// The http headers.
+    #[arg(short = 'H', long = "header", value_name = "header/@file")]
+    pub headers: Vec<String>,
+    /// HTTP POST data.
+    #[arg(short = 'd', long = "data", value_name = "data")]
+    pub body_option: Option<String>,
 }
 
 #[tokio::main]
@@ -69,20 +75,16 @@ async fn main() -> Result<(), anyhow::Error> {
 
     tracing::subscriber::set_global_default(subscriber).unwrap();
     let cli: Cli = Cli::parse();
-    if let Err(e) = do_request(cli.url, cli.threads, cli.sleep_seconds).await {
+    if let Err(e) = do_request(cli).await {
         println!("{}", e);
     }
     Ok(())
 }
-async fn do_request(
-    url: String,
-    connections: u16,
-    sleep_seconds: u64,
-) -> Result<(), anyhow::Error> {
+async fn do_request(cli: Cli) -> Result<(), anyhow::Error> {
     let mut root_store = RootCertStore::empty();
     root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     let versions = rustls::DEFAULT_VERSIONS.to_vec();
-    let mut tls_config = ClientConfig::builder_with_provider(
+    let tls_config = ClientConfig::builder_with_provider(
         CryptoProvider {
             cipher_suites: DEFAULT_CIPHER_SUITES.to_vec(),
             ..default_provider()
@@ -99,26 +101,62 @@ async fn do_request(
         .build();
 
     let client = Client::builder(hyper_util::rt::TokioExecutor::new()).build(https.clone());
+    let mut method = String::from("GET");
+    let mut content_type_option = None;
+    if cli.body_option.is_some() {
+        method = String::from("POST");
+        content_type_option = Some(String::from("application/x-www-form-urlencoded"));
+    }
+    let mut req_builder = Request::builder()
+        .method(method.as_str())
+        .uri(cli.url.clone());
+    let mut header_map = HeaderMap::new();
+    if let Some(content_type) = content_type_option {
+        header_map.insert(CONTENT_TYPE, HeaderValue::from_str(&content_type)?);
+    }
+    for x in cli.headers.clone() {
+        let split: Vec<String> = x.splitn(2, ':').map(|s| s.to_string()).collect();
+        let key = &split[0];
+        let value = &split[1];
+        header_map.insert(
+            HeaderName::from_str(key.as_str())?,
+            HeaderValue::from_str(value)?,
+        );
+    }
+    for (key, val) in header_map {
+        req_builder = req_builder.header(key.ok_or(anyhow!(""))?, val);
+    }
+    let req = req_builder.body(Full::new(Bytes::new()))?;
 
-    let mut task_list = vec![];
+    let mut task_list = JoinSet::new();
     let shared_list: Arc<Mutex<StatisticList>> = Arc::new(Mutex::new(StatisticList {
         response_list: vec![],
     }));
+    let (sender, _) = broadcast::channel(16);
+
     let now = Instant::now();
-    for _ in 0..connections {
+    for _ in 0..cli.threads.clone() {
+        let rx2: Receiver<()> = sender.subscribe();
+
         let cloned_list = shared_list.clone();
-        let clone_url = url.clone();
-        let clone_client = client.clone();
-        let task =
-            tokio::spawn(
-                async move { submit_task(cloned_list.clone(), clone_client, clone_url).await },
-            );
-        task_list.push(task);
+        let cloned_req = req.clone();
+        let clone_client: Client<HttpsConnector<HttpConnector>, Full<Bytes>> = client.clone();
+        task_list.spawn(async move {
+            submit_task(cloned_list.clone(), clone_client, cloned_req, rx2).await
+        });
+    }
+    let _ = sleep(Duration::from_secs(cli.sleep_seconds)).await;
+    sender.send(())?;
+
+    let total_cost = now.elapsed().as_millis();
+    while let Some(r) = task_list.join_next().await {
+        if let Ok(Ok(_)) = r {
+        } else {
+            println!("cause errppr");
+        }
     }
     drop(client);
-    let _ = sleep(Duration::from_secs(sleep_seconds)).await;
-    let total_cost = now.elapsed().as_millis();
-    task_list.iter().for_each(|item| item.abort());
+
     let list = shared_list.lock().await;
     list.print(total_cost);
     Ok(())
@@ -126,16 +164,21 @@ async fn do_request(
 async fn submit_task(
     shared_list: Arc<Mutex<StatisticList>>,
     client: Client<HttpsConnector<HttpConnector>, Full<Bytes>>,
-    url: String,
-) {
+    request: Request<Full<Bytes>>,
+
+    mut receiver: Receiver<()>,
+) -> Result<(), anyhow::Error> {
     let clone_client = client.clone();
-    let clone_url: String = url.clone();
+
     loop {
         let now = Instant::now();
-
         let cloned_client1 = clone_client.clone();
-        let clone_url1 = clone_url.parse::<hyper::Uri>().unwrap();
-        let result = cloned_client1.get(clone_url1).await.map_err(|e| {
+        let result = timeout(
+            Duration::from_secs(1),
+            cloned_client1.request(request.clone()),
+        )
+        .await?
+        .map_err(|e| {
             if let Some(err) = e.source() {
                 anyhow!("{}", err)
             } else {
@@ -151,7 +194,16 @@ async fn submit_task(
                 tokio::spawn(statistic(shared_list.clone(), elapsed, Err(anyhow!(e))));
             }
         }
+        tokio::select! {
+            biased;
+            _ = receiver.recv() => {
+                return Ok(());
+            }
+            _=async{}=>{}
+        }
     }
+
+    Ok(())
 }
 async fn statistic(
     shared_list: Arc<Mutex<StatisticList>>,
