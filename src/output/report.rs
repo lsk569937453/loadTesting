@@ -1,6 +1,5 @@
-use core::time;
 use itertools::Itertools;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub struct StatisticList {
     pub response_list: Vec<Result<ResponseStatistic, anyhow::Error>>,
@@ -20,9 +19,9 @@ impl StatisticList {
         let mut size_per_request = 0;
 
         let mut hashmap = HashMap::new();
-        let mut error_map = HashMap::new();
 
         let mut total_time_cost = 0;
+        let mut error_map = HashMap::new();
         for result in &self.response_list {
             match result {
                 Ok(item) => {
@@ -55,6 +54,7 @@ impl StatisticList {
             .iter()
             .map(|(k, v)| format!("[{}] {} responses", k, v))
             .join(", ");
+
         let err_message = error_map
             .iter()
             .map(|(k, v)| format!("[{}] {} responses", k, v))
