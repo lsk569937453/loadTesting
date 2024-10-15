@@ -14,7 +14,6 @@ use http_body_util::Full;
 use hyper::body::Bytes;
 use hyper::header::HeaderValue;
 use hyper::header::CONTENT_LENGTH;
-use hyper::Method;
 use hyper::Response;
 use hyper_rustls::HttpsConnector;
 use rustls::crypto::ring::default_provider;
@@ -28,14 +27,12 @@ use tokio::time::timeout;
 
 use hyper::header::HeaderName;
 use hyper::header::CONTENT_TYPE;
-use hyper::http::request::Parts;
 use hyper::HeaderMap;
 use hyper::Request;
 use std::str::FromStr;
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 use tokio::time::{sleep, Duration};
-use tracing;
 use tracing::Level;
 #[derive(Parser)]
 #[command(author, version, about, long_about)]
@@ -135,7 +132,7 @@ async fn do_request(cli: Cli) -> Result<(), anyhow::Error> {
     let (sender, _) = broadcast::channel(16);
 
     let now = Instant::now();
-    for _ in 0..cli.threads.clone() {
+    for _ in 0..cli.threads {
         let rx2: Receiver<()> = sender.subscribe();
 
         let cloned_list = shared_list.clone();
@@ -224,7 +221,7 @@ async fn statistic(
                 .unwrap_or(0);
             let mut list = shared_list.lock().await;
             let response_statistic = ResponseStatistic {
-                time_cost: time_cost,
+                time_cost,
                 staus_code: res.status().as_u16(),
                 content_length: content_len,
             };

@@ -1,5 +1,5 @@
 use itertools::Itertools;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 pub struct StatisticList {
     pub response_list: Vec<Result<ResponseStatistic, anyhow::Error>>,
@@ -87,36 +87,34 @@ pub fn print() {
     let x = 42;
     let y = 123;
 
-    let s = format!(
-        r#"
+    let s = r#"
         Summary:
-          Total:	{{ formatNumber .Total.Seconds }} secs
-          Slowest:	{{ formatNumber .Slowest }} secs
-          Fastest:	{{ formatNumber .Fastest }} secs
-          Average:	{{ formatNumber .Average }} secs
-          Requests/sec:	{{ formatNumber .Rps }}
-          {{ if gt .SizeTotal 0 }}
-          Total data:	{{ .SizeTotal }} bytes
-          Size/request:	{{ .SizeReq }} bytes{{ end }}
+          Total:	{ formatNumber .Total.Seconds } secs
+          Slowest:	{ formatNumber .Slowest } secs
+          Fastest:	{ formatNumber .Fastest } secs
+          Average:	{ formatNumber .Average } secs
+          Requests/sec:	{ formatNumber .Rps }
+          { if gt .SizeTotal 0 }
+          Total data:	{ .SizeTotal } bytes
+          Size/request:	{ .SizeReq } bytes{ end }
         
         Response time histogram:
-        {{ histogram .Histogram }}
+        { histogram .Histogram }
         
-        Latency distribution:{{ range .LatencyDistribution }}
-          {{ .Percentage }}%% in {{ formatNumber .Latency }} secs{{ end }}
+        Latency distribution:{ range .LatencyDistribution }
+          { .Percentage }%% in { formatNumber .Latency } secs{ end }
         
         Details (average, fastest, slowest):
-          DNS+dialup:	{{ formatNumber .AvgConn }} secs, {{ formatNumber .ConnMax }} secs, {{ formatNumber .ConnMin }} secs
-          DNS-lookup:	{{ formatNumber .AvgDNS }} secs, {{ formatNumber .DnsMax }} secs, {{ formatNumber .DnsMin }} secs
-          req write:	{{ formatNumber .AvgReq }} secs, {{ formatNumber .ReqMax }} secs, {{ formatNumber .ReqMin }} secs
-          resp wait:	{{ formatNumber .AvgDelay }} secs, {{ formatNumber .DelayMax }} secs, {{ formatNumber .DelayMin }} secs
-          resp read:	{{ formatNumber .AvgRes }} secs, {{ formatNumber .ResMax }} secs, {{ formatNumber .ResMin }} secs
+          DNS+dialup:	{ formatNumber .AvgConn } secs, { formatNumber .ConnMax } secs, { formatNumber .ConnMin } secs
+          DNS-lookup:	{ formatNumber .AvgDNS } secs, { formatNumber .DnsMax } secs, { formatNumber .DnsMin } secs
+          req write:	{ formatNumber .AvgReq } secs, { formatNumber .ReqMax } secs, { formatNumber .ReqMin } secs
+          resp wait:	{ formatNumber .AvgDelay } secs, { formatNumber .DelayMax } secs, { formatNumber .DelayMin } secs
+          resp read:	{ formatNumber .AvgRes } secs, { formatNumber .ResMax } secs, { formatNumber .ResMin } secs
         
-        Status code distribution:{{ range $code, $num := .StatusCodeDist }}
-          [{{ $code }}]	{{ $num }} responses{{ end }}
+        Status code distribution:{ range $code, $num := .StatusCodeDist }
+          [{ $code }]	{ $num } responses{ end }
         
-        {{ if gt (len .ErrorDist) 0 }}Error distribution:{{ range $err, $num := .ErrorDist }}
-          [{{ $num }}]	{{ $err }}{{ end }}{{ end }}
-        "#
-    );
+        { if gt (len .ErrorDist) 0 }Error distribution:{ range $err, $num := .ErrorDist }
+          [{ $num }]	{ $err }{ end }{ end }
+        "#.to_string();
 }
