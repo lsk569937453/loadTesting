@@ -1,8 +1,11 @@
 use itertools::Itertools;
 use std::collections::HashMap;
 
+use crate::vojo::cli::Cli;
+use hdrhistogram::Histogram;
 pub struct StatisticList {
     pub response_list: Vec<Result<ResponseStatistic, anyhow::Error>>,
+    pub cli: Cli,
 }
 pub struct ResponseStatistic {
     pub time_cost: u128,
@@ -22,10 +25,13 @@ impl StatisticList {
 
         let mut total_time_cost = 0;
         let mut error_map = HashMap::new();
+        let mut hist = Histogram::<u64>::new(2).unwrap();
+
         for result in &self.response_list {
             match result {
                 Ok(item) => {
                     let time_cost = item.time_cost;
+                    hist += time_cost as u64;
                     let status_code = item.staus_code;
                     let content_len = item.content_length;
                     if time_cost > slow {
@@ -50,9 +56,14 @@ impl StatisticList {
                 }
             }
         }
+        let p50 = hist.value_at_quantile(0.50);
+        let p95 = hist.value_at_quantile(0.95);
+        let p99 = hist.value_at_quantile(0.99);
+
+        let response_len = self.response_list.len();
         let mapdata = hashmap
             .iter()
-            .map(|(k, v)| format!("[{}] {} responses", k, v))
+            .map(|(k, v)| format!("[{}] {} ({}%)", k, v, v * 100 / response_len))
             .join(", ");
 
         let err_message = error_map
@@ -62,18 +73,19 @@ impl StatisticList {
 
         average = total_time_cost / self.response_list.len() as u128;
         rps = self.response_list.len() as u128 / (total / 1000);
-
+        let threads = self.cli.threads;
         let format_str = format!(
             r#"
 Summary:
-    Total:          {total} millisecond 
-    Slowest:        {slow} millisecond 
-    Fastest:        {fast} millisecond 
-    Average:        {average} millisecond 
-    Requests/sec:   {rps}
-    Total data:     {total_data} bytes
-    Size/request:   {size_per_request} bytes
-        
+    Concurrency:         {threads} thread
+    Total Test Duration: {total} millisecond 
+    Slowest:             {slow} millisecond 
+    Fastest:             {fast} millisecond 
+    Average:             {average} millisecond 
+    Requests/sec:        {rps}
+    Total data:          {total_data} bytes
+    Size/request:        {size_per_request} bytes
+    Latency Percentiles: 50% {p50} ms 95% {p95} ms 99% {p99} ms     
 Status code distribution:
     {mapdata}
 Error Message:

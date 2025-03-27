@@ -7,6 +7,7 @@ use std::sync::Arc;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::Mutex;
 mod output;
+mod vojo;
 #[macro_use]
 extern crate anyhow;
 use clap::Parser;
@@ -22,47 +23,18 @@ use rustls::crypto::CryptoProvider;
 use rustls::ClientConfig;
 use rustls::RootCertStore;
 
-use tokio::sync::broadcast;
-use tokio::time::timeout;
-
+use crate::vojo::cli::Cli;
 use hyper::header::HeaderName;
 use hyper::header::CONTENT_TYPE;
 use hyper::HeaderMap;
 use hyper::Request;
 use std::str::FromStr;
+use tokio::sync::broadcast;
 use tokio::task::JoinSet;
+use tokio::time::timeout;
 use tokio::time::Instant;
 use tokio::time::{sleep, Duration};
 use tracing::Level;
-#[derive(Parser)]
-#[command(author, version, about, long_about)]
-struct Cli {
-    /// The request url,like http://www.google.com
-    url: String,
-    /// Number of workers to run concurrently. Total number of requests cannot
-    ///  be smaller than the concurrency level. Default is 50..
-    #[arg(
-        short = 'c',
-        long,
-        value_name = "Number of workers",
-        default_value_t = 50
-    )]
-    threads: u16,
-    /// Duration of application to send requests. When duration is reached,application stops and exits.
-    #[arg(
-        short = 'z',
-        long,
-        value_name = "Duration of application to send requests",
-        default_value_t = 5
-    )]
-    sleep_seconds: u64,
-    /// The http headers.
-    #[arg(short = 'H', long = "header", value_name = "header/@file")]
-    pub headers: Vec<String>,
-    /// HTTP POST data.
-    #[arg(short = 'd', long = "data", value_name = "data")]
-    pub body_option: Option<String>,
-}
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
@@ -127,6 +99,7 @@ async fn do_request(cli: Cli) -> Result<(), anyhow::Error> {
 
     let mut task_list = JoinSet::new();
     let shared_list: Arc<Mutex<StatisticList>> = Arc::new(Mutex::new(StatisticList {
+        cli: cli.clone(),
         response_list: vec![],
     }));
     let (sender, _) = broadcast::channel(16);
