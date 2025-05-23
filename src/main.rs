@@ -151,21 +151,24 @@ async fn submit_task(
         let now = Instant::now();
         let cloned_client1 = clone_client.clone();
         let result = timeout(
-            Duration::from_secs(5),
+            Duration::from_millis(500),
             cloned_client1.request(request.clone()),
         )
-        .await?
-        .map_err(|e| {
-            error!("{}", e);
-            anyhow!("{}", e)
-        });
+        .await;
         let elapsed = now.elapsed().as_millis();
         match result {
-            Ok(res) => {
+            Ok(Ok(res)) => {
                 tokio::spawn(statistic(shared_list.clone(), elapsed, Ok(res)));
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 tokio::spawn(statistic(shared_list.clone(), elapsed, Err(anyhow!(e))));
+            }
+            Err(e) => {
+                tokio::spawn(statistic(
+                    shared_list.clone(),
+                    elapsed,
+                    Err(anyhow!("Request timeout")),
+                ));
             }
         }
         tokio::select! {
