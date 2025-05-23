@@ -2,7 +2,6 @@ use hyper::body::Incoming;
 use hyper_util::client::legacy::{connect::HttpConnector, Client};
 use output::report::ResponseStatistic;
 use output::report::StatisticList;
-use std::error::Error;
 use std::sync::Arc;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::Mutex;
@@ -10,6 +9,8 @@ mod output;
 mod vojo;
 #[macro_use]
 extern crate anyhow;
+#[macro_use]
+extern crate tracing;
 use clap::Parser;
 use http_body_util::Full;
 use hyper::body::Bytes;
@@ -34,18 +35,23 @@ use tokio::task::JoinSet;
 use tokio::time::timeout;
 use tokio::time::Instant;
 use tokio::time::{sleep, Duration};
-use tracing::Level;
-
+use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::Layer;
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
-    let subscriber = tracing_subscriber::FmtSubscriber::builder()
-        .with_max_level(Level::INFO)
-        .finish();
-
-    tracing::subscriber::set_global_default(subscriber).unwrap();
+    let console_layer = tracing_subscriber::fmt::Layer::new()
+        .with_target(true)
+        .with_ansi(true)
+        .with_writer(std::io::stdout)
+        .with_filter(tracing_subscriber::filter::LevelFilter::INFO);
+    let _ = tracing_subscriber::registry()
+        .with(console_layer)
+        .with(tracing_subscriber::filter::LevelFilter::TRACE)
+        .try_init();
     let cli: Cli = Cli::parse();
     if let Err(e) = do_request(cli).await {
-        println!("{}", e);
+        eprintln!("{}", e);
     }
     Ok(())
 }
@@ -115,6 +121,7 @@ async fn do_request(cli: Cli) -> Result<(), anyhow::Error> {
             submit_task(cloned_list.clone(), clone_client, cloned_req, rx2).await
         });
     }
+
     let _ = sleep(Duration::from_secs(cli.sleep_seconds)).await;
     sender.send(())?;
 
@@ -144,16 +151,13 @@ async fn submit_task(
         let now = Instant::now();
         let cloned_client1 = clone_client.clone();
         let result = timeout(
-            Duration::from_secs(1),
+            Duration::from_secs(5),
             cloned_client1.request(request.clone()),
         )
         .await?
         .map_err(|e| {
-            if let Some(err) = e.source() {
-                anyhow!("{}", err)
-            } else {
-                anyhow!(e)
-            }
+            error!("{}", e);
+            anyhow!("{}", e)
         });
         let elapsed = now.elapsed().as_millis();
         match result {
