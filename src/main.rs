@@ -51,7 +51,7 @@ async fn main() -> Result<(), anyhow::Error> {
         .try_init();
     let cli: Cli = Cli::parse();
     if let Err(e) = do_request(cli).await {
-        eprintln!("{}", e);
+        eprintln!("{e}");
     }
     Ok(())
 }
@@ -134,8 +134,13 @@ async fn do_request(cli: Cli) -> Result<(), anyhow::Error> {
     }
     drop(client);
 
-    let list = shared_list.lock().await;
-    list.print(total_cost);
+    let stats = shared_list.lock().await;
+    if let Some(summary) = stats.analyze(now.elapsed()) {
+        // 3. 打印格式化后的报告
+        println!("{summary}");
+    } else {
+        println!("No responses were recorded.");
+    }
     Ok(())
 }
 async fn submit_task(
@@ -155,7 +160,7 @@ async fn submit_task(
             cloned_client1.request(request.clone()),
         )
         .await;
-        let elapsed = now.elapsed().as_millis();
+        let elapsed = now.elapsed().as_nanos();
         match result {
             Ok(Ok(res)) => {
                 tokio::spawn(statistic(shared_list.clone(), elapsed, Ok(res)));
@@ -184,7 +189,7 @@ async fn submit_task(
 }
 async fn statistic(
     shared_list: Arc<Mutex<StatisticList>>,
-    time_cost: u128,
+    time_cost_ns: u128,
     result: Result<Response<Incoming>, anyhow::Error>,
 ) {
     match result {
@@ -201,8 +206,8 @@ async fn statistic(
                 .unwrap_or(0);
             let mut list = shared_list.lock().await;
             let response_statistic = ResponseStatistic {
-                time_cost,
-                staus_code: res.status().as_u16(),
+                time_cost_ns: time_cost_ns as u64,
+                status_code: res.status().as_u16(),
                 content_length: content_len,
             };
             list.response_list.push(Ok(response_statistic));
