@@ -14,8 +14,8 @@ pub struct Cli {
     pub concurrency: u16,
 
     /// Duration of the test. The application will stop and exit when the duration is reached.
-    /// Supported formats: "10s", "1m", "2h30m".
-    #[arg(short = 'd', long, value_parser = humantime::parse_duration, default_value = "10s")]
+    /// Format examples: 30s, 20ms, 10m, 1d.
+    #[arg(short = 'd', long, value_parser = parse_strict_duration, default_value = "10s")]
     pub duration: Duration,
 
     /// Add a custom HTTP header to the request.
@@ -28,6 +28,32 @@ pub struct Cli {
     /// and its content will be read as the body.
     #[arg(short = 'b', long = "body")]
     pub body: Option<String>,
+}
+/// A strict duration parser that only accepts s, ms, m, d.
+fn parse_strict_duration(s: &str) -> Result<Duration, String> {
+    // 找到数值和单位的分界点
+    let split_point = s.find(|c: char| !c.is_ascii_digit());
+
+    let (num_str, unit_str) = match split_point {
+        Some(idx) => s.split_at(idx),
+        None => return Err("Invalid format. Must include a unit (e.g., 30s, 10m).".to_string()),
+    };
+
+    // 解析数值部分
+    let value: u64 = num_str
+        .parse()
+        .map_err(|_| format!("Invalid number: '{num_str}'"))?;
+
+    // 根据单位计算 Duration
+    match unit_str {
+        "s" => Ok(Duration::from_secs(value)),
+        "ms" => Ok(Duration::from_millis(value)),
+        "m" => Ok(Duration::from_secs(value * 60)),
+        "d" => Ok(Duration::from_secs(value * 60 * 60 * 24)),
+        _ => Err(format!(
+            "Unsupported time unit: '{unit_str}'. Use 's', 'ms', 'm', or 'd'."
+        )),
+    }
 }
 
 /// Parses a "Key:Value" string into a (String, String) tuple.
