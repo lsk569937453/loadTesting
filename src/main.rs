@@ -73,6 +73,7 @@ async fn do_request(cli: Cli) -> Result<(), anyhow::Error> {
         .with_tls_config(tls_config)
         .https_or_http()
         .enable_http1()
+        .enable_http2()
         .build();
 
     let client = Client::builder(hyper_util::rt::TokioExecutor::new()).build(https.clone());
@@ -101,7 +102,15 @@ async fn do_request(cli: Cli) -> Result<(), anyhow::Error> {
     for (key, val) in header_map {
         req_builder = req_builder.header(key.ok_or(anyhow!(""))?, val);
     }
-    let req = req_builder.body(Full::new(Bytes::new()))?;
+    let mut body_bytes = Bytes::new();
+    if let Some(body_str) = &cli.body {
+        if let Some(file_path) = body_str.strip_prefix('@') {
+            body_bytes = tokio::fs::read(file_path).await?.into();
+        } else {
+            body_bytes = Bytes::from(body_str.clone());
+        }
+    }
+    let req = req_builder.body(Full::new(body_bytes))?;
 
     let mut task_list = JoinSet::new();
     let shared_list: Arc<Mutex<StatisticList>> = Arc::new(Mutex::new(StatisticList {
