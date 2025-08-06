@@ -73,12 +73,13 @@ async fn do_request(cli: Cli) -> Result<(), anyhow::Error> {
         .with_tls_config(tls_config)
         .https_or_http()
         .enable_http1()
+        .enable_http2()
         .build();
 
     let client = Client::builder(hyper_util::rt::TokioExecutor::new()).build(https.clone());
     let mut method = String::from("GET");
     let mut content_type_option = None;
-    if cli.body_option.is_some() {
+    if cli.body.is_some() {
         method = String::from("POST");
         content_type_option = Some(String::from("application/x-www-form-urlencoded"));
     }
@@ -90,18 +91,26 @@ async fn do_request(cli: Cli) -> Result<(), anyhow::Error> {
         header_map.insert(CONTENT_TYPE, HeaderValue::from_str(&content_type)?);
     }
     for x in cli.headers.clone() {
-        let split: Vec<String> = x.splitn(2, ':').map(|s| s.to_string()).collect();
-        let key = &split[0];
-        let value = &split[1];
+        // let split: Vec<String> = x.splitn(2, ':').map(|s| s.to_string()).collect();
+        let key = x.0;
+        let value = x.1;
         header_map.insert(
             HeaderName::from_str(key.as_str())?,
-            HeaderValue::from_str(value)?,
+            HeaderValue::from_str(&value)?,
         );
     }
     for (key, val) in header_map {
         req_builder = req_builder.header(key.ok_or(anyhow!(""))?, val);
     }
-    let req = req_builder.body(Full::new(Bytes::new()))?;
+    let mut body_bytes = Bytes::new();
+    if let Some(body_str) = &cli.body {
+        if let Some(file_path) = body_str.strip_prefix('@') {
+            body_bytes = tokio::fs::read(file_path).await?.into();
+        } else {
+            body_bytes = Bytes::from(body_str.clone());
+        }
+    }
+    let req = req_builder.body(Full::new(body_bytes))?;
 
     let mut task_list = JoinSet::new();
     let shared_list: Arc<Mutex<StatisticList>> = Arc::new(Mutex::new(StatisticList {
@@ -111,7 +120,7 @@ async fn do_request(cli: Cli) -> Result<(), anyhow::Error> {
     let (sender, _) = broadcast::channel(16);
 
     let now = Instant::now();
-    for _ in 0..cli.threads {
+    for _ in 0..cli.concurrency {
         let rx2: Receiver<()> = sender.subscribe();
 
         let cloned_list = shared_list.clone();
@@ -122,7 +131,7 @@ async fn do_request(cli: Cli) -> Result<(), anyhow::Error> {
         });
     }
 
-    let _ = sleep(Duration::from_secs(cli.sleep_seconds)).await;
+    let _ = sleep(cli.duration).await;
     sender.send(())?;
 
     let total_cost = now.elapsed().as_millis();

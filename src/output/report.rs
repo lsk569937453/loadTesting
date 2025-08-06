@@ -106,8 +106,8 @@ impl StatisticList {
         let avg_size_per_request = total_data as f64 / successful_requests as f64;
 
         Some(BenchmarkSummary {
-            url: self.cli.url.clone(),
-            concurrency: self.cli.threads as u64, // 类型转换 u16 -> u64
+            url: self.cli.url.to_string().clone(),
+            concurrency: self.cli.concurrency as u64, // 类型转换 u16 -> u64
             actual_duration,
             requests_per_sec,
             data_transfer_rate_mbps,
@@ -136,8 +136,8 @@ impl StatisticList {
         error_dist: HashMap<String, usize>,
     ) -> BenchmarkSummary {
         BenchmarkSummary {
-            url: self.cli.url.clone(),
-            concurrency: self.cli.threads as u64,
+            url: self.cli.url.to_string().clone(),
+            concurrency: self.cli.concurrency as u64,
             actual_duration,
             requests_per_sec: self.response_list.len() as f64 / actual_duration.as_secs_f64(),
             data_transfer_rate_mbps: 0.0,
