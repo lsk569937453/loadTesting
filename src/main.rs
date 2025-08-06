@@ -2,13 +2,15 @@ use hyper::body::Incoming;
 use hyper_util::client::legacy::{connect::HttpConnector, Client};
 use output::report::ResponseStatistic;
 use output::report::StatisticList;
-use std::error::Error;
 use std::sync::Arc;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::Mutex;
 mod output;
+mod vojo;
 #[macro_use]
 extern crate anyhow;
+#[macro_use]
+extern crate tracing;
 use clap::Parser;
 use http_body_util::Full;
 use hyper::body::Bytes;
@@ -22,58 +24,34 @@ use rustls::crypto::CryptoProvider;
 use rustls::ClientConfig;
 use rustls::RootCertStore;
 
-use tokio::sync::broadcast;
-use tokio::time::timeout;
-
+use crate::vojo::cli::Cli;
 use hyper::header::HeaderName;
 use hyper::header::CONTENT_TYPE;
 use hyper::HeaderMap;
 use hyper::Request;
 use std::str::FromStr;
+use tokio::sync::broadcast;
 use tokio::task::JoinSet;
+use tokio::time::timeout;
 use tokio::time::Instant;
 use tokio::time::{sleep, Duration};
-use tracing::Level;
-#[derive(Parser)]
-#[command(author, version, about, long_about)]
-struct Cli {
-    /// The request url,like http://www.google.com
-    url: String,
-    /// Number of workers to run concurrently. Total number of requests cannot
-    ///  be smaller than the concurrency level. Default is 50..
-    #[arg(
-        short = 'c',
-        long,
-        value_name = "Number of workers",
-        default_value_t = 50
-    )]
-    threads: u16,
-    /// Duration of application to send requests. When duration is reached,application stops and exits.
-    #[arg(
-        short = 'z',
-        long,
-        value_name = "Duration of application to send requests",
-        default_value_t = 5
-    )]
-    sleep_seconds: u64,
-    /// The http headers.
-    #[arg(short = 'H', long = "header", value_name = "header/@file")]
-    pub headers: Vec<String>,
-    /// HTTP POST data.
-    #[arg(short = 'd', long = "data", value_name = "data")]
-    pub body_option: Option<String>,
-}
-
+use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::Layer;
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
-    let subscriber = tracing_subscriber::FmtSubscriber::builder()
-        .with_max_level(Level::INFO)
-        .finish();
-
-    tracing::subscriber::set_global_default(subscriber).unwrap();
+    let console_layer = tracing_subscriber::fmt::Layer::new()
+        .with_target(true)
+        .with_ansi(true)
+        .with_writer(std::io::stdout)
+        .with_filter(tracing_subscriber::filter::LevelFilter::INFO);
+    let _ = tracing_subscriber::registry()
+        .with(console_layer)
+        .with(tracing_subscriber::filter::LevelFilter::TRACE)
+        .try_init();
     let cli: Cli = Cli::parse();
     if let Err(e) = do_request(cli).await {
-        println!("{}", e);
+        eprintln!("{e}");
     }
     Ok(())
 }
@@ -127,6 +105,7 @@ async fn do_request(cli: Cli) -> Result<(), anyhow::Error> {
 
     let mut task_list = JoinSet::new();
     let shared_list: Arc<Mutex<StatisticList>> = Arc::new(Mutex::new(StatisticList {
+        cli: cli.clone(),
         response_list: vec![],
     }));
     let (sender, _) = broadcast::channel(16);
@@ -142,6 +121,7 @@ async fn do_request(cli: Cli) -> Result<(), anyhow::Error> {
             submit_task(cloned_list.clone(), clone_client, cloned_req, rx2).await
         });
     }
+
     let _ = sleep(Duration::from_secs(cli.sleep_seconds)).await;
     sender.send(())?;
 
@@ -154,8 +134,13 @@ async fn do_request(cli: Cli) -> Result<(), anyhow::Error> {
     }
     drop(client);
 
-    let list = shared_list.lock().await;
-    list.print(total_cost);
+    let stats = shared_list.lock().await;
+    if let Some(summary) = stats.analyze(now.elapsed()) {
+        // 3. 打印格式化后的报告
+        println!("{summary}");
+    } else {
+        println!("No responses were recorded.");
+    }
     Ok(())
 }
 async fn submit_task(
@@ -171,24 +156,24 @@ async fn submit_task(
         let now = Instant::now();
         let cloned_client1 = clone_client.clone();
         let result = timeout(
-            Duration::from_secs(1),
+            Duration::from_millis(500),
             cloned_client1.request(request.clone()),
         )
-        .await?
-        .map_err(|e| {
-            if let Some(err) = e.source() {
-                anyhow!("{}", err)
-            } else {
-                anyhow!(e)
-            }
-        });
-        let elapsed = now.elapsed().as_millis();
+        .await;
+        let elapsed = now.elapsed().as_nanos();
         match result {
-            Ok(res) => {
+            Ok(Ok(res)) => {
                 tokio::spawn(statistic(shared_list.clone(), elapsed, Ok(res)));
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 tokio::spawn(statistic(shared_list.clone(), elapsed, Err(anyhow!(e))));
+            }
+            Err(e) => {
+                tokio::spawn(statistic(
+                    shared_list.clone(),
+                    elapsed,
+                    Err(anyhow!("Request timeout")),
+                ));
             }
         }
         tokio::select! {
@@ -204,7 +189,7 @@ async fn submit_task(
 }
 async fn statistic(
     shared_list: Arc<Mutex<StatisticList>>,
-    time_cost: u128,
+    time_cost_ns: u128,
     result: Result<Response<Incoming>, anyhow::Error>,
 ) {
     match result {
@@ -221,8 +206,8 @@ async fn statistic(
                 .unwrap_or(0);
             let mut list = shared_list.lock().await;
             let response_statistic = ResponseStatistic {
-                time_cost,
-                staus_code: res.status().as_u16(),
+                time_cost_ns: time_cost_ns as u64,
+                status_code: res.status().as_u16(),
                 content_length: content_len,
             };
             list.response_list.push(Ok(response_statistic));
