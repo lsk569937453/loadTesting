@@ -44,3 +44,4 @@ tokio = { version = "1.47.1", features = ["full"] }
 tracing = "0.1.41"
 tracing-subscriber = "0.3.19"
 webpki-roots = "1.0.2"
+prettytable-rs = "0.10.0"

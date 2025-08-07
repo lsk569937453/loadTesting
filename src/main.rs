@@ -13,6 +13,9 @@ mod vojo;
 extern crate anyhow;
 #[macro_use]
 extern crate tracing;
+
+#[macro_use]
+extern crate prettytable;
 use clap::Parser;
 use http_body_util::Full;
 use hyper::body::Bytes;
@@ -40,6 +43,7 @@ use tokio::time::{sleep, Duration};
 use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::Layer;
+
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
     let console_layer = tracing_subscriber::fmt::Layer::new()
@@ -52,6 +56,7 @@ async fn main() -> Result<(), anyhow::Error> {
         .with(tracing_subscriber::filter::LevelFilter::TRACE)
         .try_init();
     let cli: Cli = Cli::parse();
+
     if let Err(e) = do_request(cli).await {
         eprintln!("{e}");
     }
