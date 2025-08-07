@@ -1,5 +1,6 @@
 # HTTP Stress Tester
 
+[**中文说明**](https://github.com/lsk569937453/loadTesting/blob/main/README.zh-CN.md)
 A simple yet powerful command-line HTTP stress testing tool written in Rust. It leverages tokio, hyper, and rustls to provide high-concurrency, asynchronous performance for load testing your web endpoints.
 
 ## Features
