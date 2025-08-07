@@ -1,17 +1,14 @@
 [package]
-name = "loadTesting"
+name = "kt"
 version = "0.0.12"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-[[bin]]
-name = "kt"
-path = "src/main.rs"
+
 
 [dependencies]
 anyhow = "1.0.98"
 byte-unit = "5.1.6"
-clap = { version = "4.5.42", features = ["derive"] }
+clap = { version = "4.5.43", features = ["derive"] }
 env_logger = "0.11.8"
 futures = "0.3.31"
 hdrhistogram = "7.5.4"

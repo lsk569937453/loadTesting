@@ -262,9 +262,9 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
 name = "clap"
-version = "4.5.42"
+version = "4.5.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed87a9d530bb41a67537289bafcac159cb3ee28460e0a4571123d2a778a6a882"
+checksum = "50fd97c9dc2399518aa331917ac6f274280ec5eb34e555dd291899745c48ec6f"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -272,9 +272,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.5.42"
+version = "4.5.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64f4f3f3c77c94aff3c7e9aac9a2ca1974a5adf392a8bb751e827d6d127ab966"
+checksum = "c35b5830294e1fa0462034af85cc95225a4cb07092c088c55bda3147cfcd8f65"
 dependencies = [
  "anstream",
  "anstyle",
@@ -849,6 +849,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "kt"
+version = "0.0.12"
+dependencies = [
+ "anyhow",
+ "byte-unit",
+ "clap",
+ "env_logger",
+ "futures",
+ "hdrhistogram",
+ "http",
+ "http-body-util",
+ "humantime",
+ "hyper",
+ "hyper-rustls",
+ "hyper-util",
+ "itertools",
+ "log",
+ "mlua",
+ "prettytable-rs",
+ "rustls",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "webpki-roots",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -875,33 +902,6 @@ name = "linux-raw-sys"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cd945864f07fe9f5371a27ad7b52a172b4b499999f1d97574c9fa68373937e12"
-
-[[package]]
-name = "loadTesting"
-version = "0.0.12"
-dependencies = [
- "anyhow",
- "byte-unit",
- "clap",
- "env_logger",
- "futures",
- "hdrhistogram",
- "http",
- "http-body-util",
- "humantime",
- "hyper",
- "hyper-rustls",
- "hyper-util",
- "itertools",
- "log",
- "mlua",
- "prettytable-rs",
- "rustls",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "webpki-roots",
-]
 
 [[package]]
 name = "lock_api"

@@ -54,14 +54,15 @@ The tool is configured entirely through command-line arguments.
 
 ## Command-Line Options
 
-| Option                | Alias | Description                                                                                              | Default Value |
-| --------------------- | ----- | -------------------------------------------------------------------------------------------------------- | ------------- |
-| --concurrency <NUM>   | -c    | The number of concurrent workers (threads) to run.                                                       | 50            |
-| --duration <DURATION> | -d    | The duration of the test. Valid units: s (seconds), ms (milliseconds), m (minutes), d (days).            | 10s           |
-| --header <KEY:VALUE>  | -H    | Adds a custom HTTP header to the request. This option can be used multiple times.                        | None          |
-| --body <DATA>         | -b    | The HTTP request body data. If the value starts with @, the rest is treated as a file path to read from. | None          |
-| --help                |       | Print help information.                                                                                  |               |
-| --version             |       | Print version information.                                                                               |               |
+| Option                  | Alias | Description                                                                                                                         | Default Value |
+| :---------------------- | :---- | :---------------------------------------------------------------------------------------------------------------------------------- | :------------ |
+| `--concurrency <NUM>`   | `-c`  | The number of concurrent workers (threads) to run.                                                                                  | 50            |
+| `--duration <DURATION>` | `-d`  | The duration of the test. Valid units: s (seconds), ms (milliseconds), m (minutes), d (days). Mutually exclusive with `--requests`. | None          |
+| `--requests <REQUESTS>` | `-r`  | The total number of requests to send. Mutually exclusive with `--duration`.                                                         | 500000        |
+| `--header <KEY:VALUE>`  | `-H`  | Adds a custom HTTP header to the request. This option can be used multiple times. Format: `"Key:Value"`.                            | None          |
+| `--body <DATA>`         | `-b`  | The HTTP request body data. If the value starts with `@`, the rest is treated as a file path to read from.                          | None          |
+| `--help`                | `-h`  | Print help information.                                                                                                             |               |
+| `--version`             | `-V`  | Print version information.                                                                                                          |               |
 
 ## Examples
 
