@@ -11,7 +11,18 @@ A simple yet powerful command-line HTTP stress testing tool written in Rust. It 
 - **Request Body Support:** Send POST requests with body data, either as a direct string or by reading from a file.
 - **Detailed Statistics:** At the end of the test, it provides a summary report with key performance indicators, including requests per second, latency distribution, and success rates.
 
-## Installation
+## Installation on Linux (Quick Start)
+
+For Linux users, the quickest way to get started is by downloading the pre-compiled binary directly from GitHub Releases. This method does not require you to have the Rust toolchain installed.
+
+### Download the Latest Release
+
+```
+curl -L -o kt https://github.com/lsk569937453/loadTesting/releases/download/0.0.11/kt-x86_64-unknown-linux-gnu
+chmod +x ./kt
+```
+
+## Build from Source
 
 To build and run this tool, you need the Rust toolchain (including cargo) installed on your system.
 
