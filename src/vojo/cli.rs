@@ -13,11 +13,24 @@ pub struct Cli {
     #[arg(short = 'c', long, default_value_t = 50)]
     pub concurrency: u16,
 
-    /// Duration of the test. The application will stop and exit when the duration is reached.
-    /// Format examples: 30s, 20ms, 10m, 1d.
-    #[arg(short = 'd', long, value_parser = parse_strict_duration, default_value = "10s")]
-    pub duration: Duration,
+    /// Duration of the test. Stops when the duration is reached.
+    /// Mutually exclusive with --requests. e.g., 30s, 10m.
+    #[arg(short = 'd', long, value_parser = parse_strict_duration, conflicts_with = "requests")]
+    pub duration: Option<Duration>,
 
+    /// Total number of requests to send.
+    /// Mutually exclusive with --duration.
+    // Use `default_value` to set the default.
+    // Clap will correctly report a conflict if -d is used with this default.
+    // Also, requests must now be required or have a default. We give it a default.
+    #[arg(
+        short = 'r',
+        long,
+        help = "Total number of requests to send. Mutually exclusive with --duration.",
+        default_value = "500000",
+        conflicts_with = "duration"
+    )]
+    pub requests: u64,
     /// Add a custom HTTP header to the request.
     /// This option can be used multiple times. Format: "Key:Value".
     #[arg(short = 'H', long = "header", value_parser = parse_key_val, name = "KEY_VALUE")]
@@ -31,7 +44,6 @@ pub struct Cli {
 }
 /// A strict duration parser that only accepts s, ms, m, d.
 fn parse_strict_duration(s: &str) -> Result<Duration, String> {
-    // 找到数值和单位的分界点
     let split_point = s.find(|c: char| !c.is_ascii_digit());
 
     let (num_str, unit_str) = match split_point {
@@ -39,12 +51,10 @@ fn parse_strict_duration(s: &str) -> Result<Duration, String> {
         None => return Err("Invalid format. Must include a unit (e.g., 30s, 10m).".to_string()),
     };
 
-    // 解析数值部分
     let value: u64 = num_str
         .parse()
         .map_err(|_| format!("Invalid number: '{num_str}'"))?;
 
-    // 根据单位计算 Duration
     match unit_str {
         "s" => Ok(Duration::from_secs(value)),
         "ms" => Ok(Duration::from_millis(value)),
@@ -56,14 +66,12 @@ fn parse_strict_duration(s: &str) -> Result<Duration, String> {
     }
 }
 
-/// Parses a "Key:Value" string into a (String, String) tuple.
 fn parse_key_val(s: &str) -> Result<(String, String), String> {
     s.split_once(':')
         .map(|(key, val)| (key.trim().to_string(), val.trim().to_string()))
         .ok_or_else(|| "Header must be in 'Key:Value' format".to_string())
 }
 
-/// Parses a string into a valid HTTP/HTTPS Uri.
 fn parse_url(s: &str) -> Result<Uri, String> {
     let uri: Uri = s.parse().map_err(|e| format!("Invalid URL format: {e}"))?;
 

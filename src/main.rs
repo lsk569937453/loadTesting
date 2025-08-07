@@ -2,6 +2,8 @@ use hyper::body::Incoming;
 use hyper_util::client::legacy::{connect::HttpConnector, Client};
 use output::report::ResponseStatistic;
 use output::report::StatisticList;
+use std::sync::atomic::AtomicI64;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::Mutex;
@@ -91,7 +93,6 @@ async fn do_request(cli: Cli) -> Result<(), anyhow::Error> {
         header_map.insert(CONTENT_TYPE, HeaderValue::from_str(&content_type)?);
     }
     for x in cli.headers.clone() {
-        // let split: Vec<String> = x.splitn(2, ':').map(|s| s.to_string()).collect();
         let key = x.0;
         let value = x.1;
         header_map.insert(
@@ -117,24 +118,36 @@ async fn do_request(cli: Cli) -> Result<(), anyhow::Error> {
         cli: cli.clone(),
         response_list: vec![],
     }));
-    let (sender, _) = broadcast::channel(16);
-
     let now = Instant::now();
-    for _ in 0..cli.concurrency {
-        let rx2: Receiver<()> = sender.subscribe();
 
-        let cloned_list = shared_list.clone();
-        let cloned_req = req.clone();
-        let clone_client: Client<HttpsConnector<HttpConnector>, Full<Bytes>> = client.clone();
-        task_list.spawn(async move {
-            submit_task(cloned_list.clone(), clone_client, cloned_req, rx2).await
-        });
+    // Logic to handle either duration or request count
+    if let Some(duration) = cli.duration {
+        // --- Duration based test ---
+        let (sender, _) = broadcast::channel(16);
+        for _ in 0..cli.concurrency {
+            let rx2 = sender.subscribe();
+            let cloned_list = shared_list.clone();
+            let cloned_req = req.clone();
+            let clone_client = client.clone();
+            task_list.spawn(async move {
+                submit_task_duration(cloned_list, clone_client, cloned_req, rx2).await
+            });
+        }
+        sleep(duration).await;
+        sender.send(())?;
+    } else {
+        let requests_counter = Arc::new(AtomicI64::new(cli.requests as i64));
+        for _ in 0..cli.concurrency {
+            let counter_clone = requests_counter.clone();
+            let cloned_list = shared_list.clone();
+            let cloned_req = req.clone();
+            let clone_client = client.clone();
+            task_list.spawn(async move {
+                submit_task_requests(cloned_list, clone_client, cloned_req, counter_clone).await
+            });
+        }
     }
 
-    let _ = sleep(cli.duration).await;
-    sender.send(())?;
-
-    let total_cost = now.elapsed().as_millis();
     while let Some(r) = task_list.join_next().await {
         if let Ok(Ok(_)) = r {
         } else {
@@ -145,18 +158,16 @@ async fn do_request(cli: Cli) -> Result<(), anyhow::Error> {
 
     let stats = shared_list.lock().await;
     if let Some(summary) = stats.analyze(now.elapsed()) {
-        // 3. 打印格式化后的报告
         println!("{summary}");
     } else {
         println!("No responses were recorded.");
     }
     Ok(())
 }
-async fn submit_task(
+async fn submit_task_duration(
     shared_list: Arc<Mutex<StatisticList>>,
     client: Client<HttpsConnector<HttpConnector>, Full<Bytes>>,
     request: Request<Full<Bytes>>,
-
     mut receiver: Receiver<()>,
 ) -> Result<(), anyhow::Error> {
     let clone_client = client.clone();
@@ -194,6 +205,42 @@ async fn submit_task(
         }
     }
 
+    Ok(())
+}
+async fn submit_task_requests(
+    shared_list: Arc<Mutex<StatisticList>>,
+    client: Client<HttpsConnector<HttpConnector>, Full<Bytes>>,
+    request: Request<Full<Bytes>>,
+    requests_counter: Arc<AtomicI64>,
+) -> Result<(), anyhow::Error> {
+    let clone_client = client.clone();
+
+    while requests_counter.fetch_sub(1, Ordering::Relaxed) > 0 {
+        let now = Instant::now();
+
+        let cloned_client1 = clone_client.clone();
+        let result = timeout(
+            Duration::from_millis(500),
+            cloned_client1.request(request.clone()),
+        )
+        .await;
+        let elapsed = now.elapsed().as_nanos();
+        match result {
+            Ok(Ok(res)) => {
+                tokio::spawn(statistic(shared_list.clone(), elapsed, Ok(res)));
+            }
+            Ok(Err(e)) => {
+                tokio::spawn(statistic(shared_list.clone(), elapsed, Err(anyhow!(e))));
+            }
+            Err(_) => {
+                tokio::spawn(statistic(
+                    shared_list.clone(),
+                    elapsed,
+                    Err(anyhow!("Request timeout")),
+                ));
+            }
+        }
+    }
     Ok(())
 }
 async fn statistic(
