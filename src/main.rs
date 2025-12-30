@@ -1,13 +1,13 @@
 use hyper::body::Incoming;
-use hyper_util::client::legacy::{connect::HttpConnector, Client};
+use hyper_util::client::legacy::{Client, connect::HttpConnector};
 use indicatif::{ProgressBar, ProgressStyle};
 use output::report::ResponseStatistic;
 use output::report::StatisticList;
+use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
-use tokio::sync::broadcast::Receiver;
 use tokio::sync::Mutex;
+use tokio::sync::broadcast::Receiver;
 mod output;
 mod vojo;
 #[macro_use]
@@ -19,31 +19,31 @@ extern crate tracing;
 extern crate prettytable;
 use clap::Parser;
 use http_body_util::Full;
-use hyper::body::Bytes;
-use hyper::header::HeaderValue;
-use hyper::header::CONTENT_LENGTH;
 use hyper::Response;
+use hyper::body::Bytes;
+use hyper::header::CONTENT_LENGTH;
+use hyper::header::HeaderValue;
 use hyper_rustls::HttpsConnector;
-use rustls::crypto::ring::default_provider;
-use rustls::crypto::ring::DEFAULT_CIPHER_SUITES;
-use rustls::crypto::CryptoProvider;
 use rustls::ClientConfig;
 use rustls::RootCertStore;
+use rustls::crypto::CryptoProvider;
+use rustls::crypto::ring::DEFAULT_CIPHER_SUITES;
+use rustls::crypto::ring::default_provider;
 
 use crate::vojo::cli::Cli;
-use hyper::header::HeaderName;
-use hyper::header::CONTENT_TYPE;
 use hyper::HeaderMap;
 use hyper::Request;
+use hyper::header::CONTENT_TYPE;
+use hyper::header::HeaderName;
 use std::str::FromStr;
 use tokio::sync::broadcast;
 use tokio::task::JoinSet;
-use tokio::time::timeout;
 use tokio::time::Instant;
-use tokio::time::{sleep, Duration};
+use tokio::time::timeout;
+use tokio::time::{Duration, sleep};
+use tracing_subscriber::Layer;
 use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::Layer;
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
@@ -136,7 +136,7 @@ async fn do_request(cli: Cli) -> Result<(), anyhow::Error> {
         if let Some(ref pb) = progress {
             pb.set_style(ProgressStyle::default_bar()
                 .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
-                .unwrap()
+                ?
                 .progress_chars("##-"));
             pb.set_message("Running load test...");
         }
@@ -176,7 +176,7 @@ async fn do_request(cli: Cli) -> Result<(), anyhow::Error> {
         if let Some(ref pb) = progress {
             pb.set_style(ProgressStyle::default_bar()
                 .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}")
-                .unwrap()
+               ?
                 .progress_chars("##-"));
             pb.set_message("Sending requests...");
         }
