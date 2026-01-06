@@ -1,12 +1,13 @@
 use hyper::body::Incoming;
-use hyper_util::client::legacy::{connect::HttpConnector, Client};
+use hyper_util::client::legacy::{Client, connect::HttpConnector};
+use indicatif::{ProgressBar, ProgressStyle};
 use output::report::ResponseStatistic;
 use output::report::StatisticList;
+use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
-use tokio::sync::broadcast::Receiver;
 use tokio::sync::Mutex;
+use tokio::sync::broadcast::Receiver;
 mod output;
 mod vojo;
 #[macro_use]
@@ -18,31 +19,31 @@ extern crate tracing;
 extern crate prettytable;
 use clap::Parser;
 use http_body_util::Full;
-use hyper::body::Bytes;
-use hyper::header::HeaderValue;
-use hyper::header::CONTENT_LENGTH;
 use hyper::Response;
+use hyper::body::Bytes;
+use hyper::header::CONTENT_LENGTH;
+use hyper::header::HeaderValue;
 use hyper_rustls::HttpsConnector;
-use rustls::crypto::ring::default_provider;
-use rustls::crypto::ring::DEFAULT_CIPHER_SUITES;
-use rustls::crypto::CryptoProvider;
 use rustls::ClientConfig;
 use rustls::RootCertStore;
+use rustls::crypto::CryptoProvider;
+use rustls::crypto::ring::DEFAULT_CIPHER_SUITES;
+use rustls::crypto::ring::default_provider;
 
 use crate::vojo::cli::Cli;
-use hyper::header::HeaderName;
-use hyper::header::CONTENT_TYPE;
 use hyper::HeaderMap;
 use hyper::Request;
+use hyper::header::CONTENT_TYPE;
+use hyper::header::HeaderName;
 use std::str::FromStr;
 use tokio::sync::broadcast;
 use tokio::task::JoinSet;
-use tokio::time::timeout;
 use tokio::time::Instant;
-use tokio::time::{sleep, Duration};
+use tokio::time::timeout;
+use tokio::time::{Duration, sleep};
+use tracing_subscriber::Layer;
 use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::Layer;
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
@@ -125,9 +126,21 @@ async fn do_request(cli: Cli) -> Result<(), anyhow::Error> {
     }));
     let now = Instant::now();
 
+    // Create progress bar
+    let progress: Option<ProgressBar>;
     // Logic to handle either duration or request count
     if let Some(duration) = cli.duration {
         // --- Duration based test ---
+        let duration_secs = duration.as_secs_f64();
+        progress = Some(ProgressBar::new(duration_secs as u64));
+        if let Some(ref pb) = progress {
+            pb.set_style(ProgressStyle::default_bar()
+                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
+                ?
+                .progress_chars("##-"));
+            pb.set_message("Running load test...");
+        }
+
         let (sender, _) = broadcast::channel(16);
         for _ in 0..cli.concurrency {
             let rx2 = sender.subscribe();
@@ -138,9 +151,36 @@ async fn do_request(cli: Cli) -> Result<(), anyhow::Error> {
                 submit_task_duration(cloned_list, clone_client, cloned_req, rx2).await
             });
         }
+
+        // Spawn progress update task
+        let pb_clone = progress.clone();
+        let start_time = Instant::now();
+        tokio::spawn(async move {
+            loop {
+                let elapsed = start_time.elapsed().as_secs_f64();
+                if let Some(ref pb) = pb_clone {
+                    pb.set_position(elapsed as u64);
+                }
+                if elapsed >= duration_secs {
+                    break;
+                }
+                sleep(Duration::from_millis(100)).await;
+            }
+        });
+
         sleep(duration).await;
         sender.send(())?;
     } else {
+        let total_requests = cli.requests;
+        progress = Some(ProgressBar::new(total_requests));
+        if let Some(ref pb) = progress {
+            pb.set_style(ProgressStyle::default_bar()
+                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}")
+               ?
+                .progress_chars("##-"));
+            pb.set_message("Sending requests...");
+        }
+
         let requests_counter = Arc::new(AtomicI64::new(cli.requests as i64));
         for _ in 0..cli.concurrency {
             let counter_clone = requests_counter.clone();
@@ -151,6 +191,23 @@ async fn do_request(cli: Cli) -> Result<(), anyhow::Error> {
                 submit_task_requests(cloned_list, clone_client, cloned_req, counter_clone).await
             });
         }
+
+        // Spawn progress update task
+        let pb_clone = progress.clone();
+        let counter_clone = requests_counter.clone();
+        tokio::spawn(async move {
+            loop {
+                let remaining = counter_clone.load(Ordering::Relaxed);
+                let completed = total_requests as i64 - remaining;
+                if let Some(ref pb) = pb_clone {
+                    pb.set_position(completed.max(0) as u64);
+                }
+                if remaining <= 0 {
+                    break;
+                }
+                sleep(Duration::from_millis(50)).await;
+            }
+        });
     }
 
     while let Some(r) = task_list.join_next().await {
@@ -160,6 +217,11 @@ async fn do_request(cli: Cli) -> Result<(), anyhow::Error> {
         }
     }
     drop(client);
+
+    // Finish progress bar
+    if let Some(pb) = progress {
+        pb.finish_with_message("Test completed!");
+    }
 
     let stats = shared_list.lock().await;
     if let Some(summary) = stats.analyze(now.elapsed()) {

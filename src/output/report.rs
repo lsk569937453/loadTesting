@@ -60,7 +60,7 @@ impl StatisticList {
 
         let mut status_code_dist = HashMap::new();
         let mut error_dist = HashMap::new();
-        let mut hist = Histogram::<u64>::new(3).unwrap();
+        let mut hist = Histogram::<u64>::new(3).ok()?;
 
         let mut total_data = 0;
         let mut successful_times_ns = Vec::new();
@@ -69,7 +69,7 @@ impl StatisticList {
             match result {
                 Ok(item) => {
                     successful_times_ns.push(item.time_cost_ns);
-                    hist.record(item.time_cost_ns).unwrap();
+                    hist.record(item.time_cost_ns).unwrap_or_default();
                     total_data += item.content_length;
                     *status_code_dist.entry(item.status_code).or_insert(0) += 1;
                 }
