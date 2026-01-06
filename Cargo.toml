@@ -2,6 +2,8 @@
 name = "cargo-kt"
 version = "0.0.12"
 edition = "2024"
+description = "A simple yet powerful command-line HTTP stress testing tool written in Rust"
+license = "MIT"
 
 [[bin]]
 name = "kt"

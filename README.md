@@ -41,7 +41,7 @@ cd loadTesting
 cargo build --release
 ```
 
-The compiled binary will be located at ./target/release/kt.
+The compiled binary will be located at target/release/kt.
 
 ## Usage
 
@@ -50,7 +50,7 @@ The tool is configured entirely through command-line arguments.
 ## Basic Syntax
 
 ```
-./target/release/kt [OPTIONS] <URL>
+kt [OPTIONS] <URL>
 
 ```
 
@@ -73,7 +73,7 @@ The tool is configured entirely through command-line arguments.
 Run a test with default settings (50 concurrent workers for 10 seconds).
 
 ```
-./target/release/kt http://localhost:8080/
+kt http://localhost:8080/
 ```
 
 ### 2. Specify Concurrency and Duration
@@ -81,7 +81,7 @@ Run a test with default settings (50 concurrent workers for 10 seconds).
 Run a test with 200 concurrent workers for 1 minute against a secure endpoint.
 
 ```
-./target/release/kt -c 200 -d 1m https://api.example.com/health
+kt -c 200 -d 1m https://api.example.com/health
 ```
 
 ### 3. Add Custom Headers
@@ -89,7 +89,7 @@ Run a test with 200 concurrent workers for 1 minute against a secure endpoint.
 Simulate a request with a specific **User-Agent** and an **Authorization token**.
 
 ```
-./target/release/kt \
+kt \
   -H "User-Agent: MyTestClient/1.0" \
   -H "Authorization: Bearer my-secret-token" \
   https://api.example.com/data
@@ -100,7 +100,7 @@ Simulate a request with a specific **User-Agent** and an **Authorization token**
 Providing a body with --body or -b will automatically change the HTTP method to POST.
 
 ```
-./target/release/kt \
+kt \
   -b '{"name":"test","value":"123"}' \
   -H "Content-Type: application/json" \
   https://api.example.com/items
@@ -124,7 +124,7 @@ Assuming you have a file named data.json:
 You can send its content like this:
 
 ```
-./target/release/kt \
+kt \
   -b @data.json \
   -H "Content-Type: application/json" \
   https://api.example.com/v2/events
