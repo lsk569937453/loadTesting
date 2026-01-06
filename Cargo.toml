@@ -1,9 +1,11 @@
 [package]
-name = "kt"
+name = "cargo-kt"
 version = "0.0.12"
 edition = "2024"
 
-
+[[bin]]
+name = "kt"
+path = "src/main.rs"
 [dependencies]
 anyhow = "=1.0.100"
 byte-unit = "=5.2.0"
