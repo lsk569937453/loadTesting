@@ -1,59 +1,75 @@
-use crate::vojo::cli::Cli;
 use hdrhistogram::Histogram;
 use itertools::Itertools;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::fmt::Formatter;
 use std::time::Duration;
+
 pub struct StatisticList {
     pub response_list: Vec<Result<ResponseStatistic, anyhow::Error>>,
-    pub cli: Cli,
 }
+
 pub struct ResponseStatistic {
     pub time_cost_ns: u64,
     pub status_code: u16,
     pub content_length: u64,
 }
+
 // 【优化】用于存放所有计算后结果的结构体
 #[derive(Debug)]
 pub struct BenchmarkSummary {
     // 会话信息
-    url: String, // 新增：测试的目标 URL
-    concurrency: u64,
-    actual_duration: Duration, // 改为实际测试时长
+    pub url: String, // 新增：测试的目标 URL
+    pub concurrency: u64,
+    pub actual_duration: Duration, // 改为实际测试时长
 
     // 吞吐量
-    requests_per_sec: f64,
-    data_transfer_rate_mbps: f64,
+    pub requests_per_sec: f64,
+    pub data_transfer_rate_mbps: f64,
 
     // 延迟 (使用 Duration 类型)
-    average_latency: Duration,
-    latency_std_dev: Duration,
-    slowest: Duration,
-    fastest: Duration,
+    pub average_latency: Duration,
+    pub latency_std_dev: Duration,
+    pub slowest: Duration,
+    pub fastest: Duration,
 
     // 延迟百分位数
-    p50: Duration,
-    p90: Duration,
-    p95: Duration,
-    p99: Duration,
-    p99_9: Duration,
+    pub p50: Duration,
+    pub p90: Duration,
+    pub p95: Duration,
+    pub p99: Duration,
+    pub p99_9: Duration,
 
     // 数据传输
-    total_data: u64,
-    avg_size_per_request: f64,
+    pub total_data: u64,
+    pub avg_size_per_request: f64,
 
     // 结果分布
-    total_requests: usize,
-    successful_requests: usize,
-    status_code_dist: HashMap<u16, usize>,
-    error_dist: HashMap<String, usize>,
+    pub total_requests: usize,
+    pub successful_requests: usize,
+    pub status_code_dist: HashMap<u16, usize>,
+    pub error_dist: HashMap<String, usize>,
 }
 
 impl StatisticList {
+    pub fn new() -> Self {
+        Self {
+            response_list: Vec::new(),
+        }
+    }
+
     /// 分析压测结果。
     /// 【重要】传入实际的测试总耗时，以获得最精确的 RPS 计算。
     pub fn analyze(&self, actual_duration: Duration) -> Option<BenchmarkSummary> {
+        self.analyze_with_url("Load test".to_string(), 0, actual_duration)
+    }
+
+    pub fn analyze_with_url(
+        &self,
+        url: String,
+        concurrency: u64,
+        actual_duration: Duration,
+    ) -> Option<BenchmarkSummary> {
         if self.response_list.is_empty() {
             return None;
         }
@@ -82,7 +98,7 @@ impl StatisticList {
         let successful_requests = successful_times_ns.len();
         if successful_requests == 0 {
             // 所有请求都失败的场景
-            return Some(self.build_error_summary(actual_duration, error_dist));
+            return Some(self.build_error_summary(url, concurrency, actual_duration, error_dist));
         }
 
         // --- 开始计算 ---
@@ -106,8 +122,8 @@ impl StatisticList {
         let avg_size_per_request = total_data as f64 / successful_requests as f64;
 
         Some(BenchmarkSummary {
-            url: self.cli.url.to_string().clone(),
-            concurrency: self.cli.concurrency as u64, // 类型转换 u16 -> u64
+            url,
+            concurrency,
             actual_duration,
             requests_per_sec,
             data_transfer_rate_mbps,
@@ -132,12 +148,14 @@ impl StatisticList {
     // 辅助函数，用于构建只有错误的摘要
     fn build_error_summary(
         &self,
+        url: String,
+        concurrency: u64,
         actual_duration: Duration,
         error_dist: HashMap<String, usize>,
     ) -> BenchmarkSummary {
         BenchmarkSummary {
-            url: self.cli.url.to_string().clone(),
-            concurrency: self.cli.concurrency as u64,
+            url,
+            concurrency,
             actual_duration,
             requests_per_sec: self.response_list.len() as f64 / actual_duration.as_secs_f64(),
             data_transfer_rate_mbps: 0.0,
