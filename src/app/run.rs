@@ -2,17 +2,18 @@ use crate::engine::config::TestResult;
 use crate::engine::config::TestRunConfig;
 use crate::engine::runner::run_load_test;
 use crate::master::aggregator::ResultAggregator;
-use crate::master::orchestrator::MasterConfig;
-use crate::master::orchestrator::MasterOrchestrator;
+use crate::master::orchestrator::{MasterConfig, MasterOrchestrator};
 use crate::vojo::cli::Cli;
 use crate::worker::server::WorkerServer;
 use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::time::Duration;
+use tokio::sync::mpsc;
 use tokio::time::sleep;
 use tracing_subscriber::Layer;
 use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
+
 pub async fn main_with_error() -> Result<(), anyhow::Error> {
     let console_layer = tracing_subscriber::fmt::Layer::new()
         .with_target(true)
@@ -93,43 +94,44 @@ async fn run_standalone(
         start_at: None,
     };
 
-    let (_duration_mode, _total_or_duration) = if let Some(d) = config.duration_secs {
-        ("duration", format!("{}s", d))
-    } else {
-        (
-            "requests",
-            config.total_requests.unwrap_or_default().to_string(),
-        )
-    };
-
     // Create progress bar
+    let total_requests = config.total_requests.unwrap_or(500000);
     let progress = ProgressBar::new(if config.duration_secs.is_some() {
         config.duration_secs.unwrap_or_default()
     } else {
-        config.total_requests.unwrap_or_default()
+        total_requests
     });
-    progress.set_style(ProgressStyle::default_bar().template(
-        "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})",
-    )?);
+    progress.set_style(
+        ProgressStyle::default_bar()
+            .template(
+                "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}",
+            )?
+            .progress_chars("##-"),
+    );
     progress.set_message("Running load test...");
+
+    // Create progress channel for request mode
+    let (progress_tx, progress_rx) = mpsc::channel(100);
 
     // Spawn test in background
     let config_clone = config.clone();
-    let test_handle = tokio::spawn(async move { run_load_test(config_clone).await });
+    let test_handle =
+        tokio::spawn(async move { run_load_test(config_clone, Some(progress_tx)).await });
 
     // Update progress
     if config.duration_secs.is_some() {
+        // Duration mode: update progress by second
         let duration_secs = config.duration_secs.unwrap_or_default();
         for i in 0..=duration_secs {
             progress.set_position(i);
             sleep(Duration::from_secs(1)).await;
         }
     } else {
-        loop {
-            progress
-                .set_position(config.total_requests.unwrap_or_default() - progress.position() + 1);
-            sleep(Duration::from_millis(100)).await;
-            if test_handle.is_finished() {
+        // Request mode: track real-time progress from channel
+        let mut rx = progress_rx;
+        while let Some(completed) = rx.recv().await {
+            progress.set_position(completed);
+            if completed >= total_requests {
                 break;
             }
         }
@@ -222,6 +224,41 @@ fn print_results(result: &TestResult, url: &str) {
         *status_codes.entry(resp.status_code).or_insert(0) += 1;
     }
 
+    // Helper function to format latency
+    fn format_latency_ns(ns: u64) -> String {
+        if ns >= 1_000_000_000 {
+            format!("{:.2} s", ns as f64 / 1_000_000_000.0)
+        } else if ns >= 1_000_000 {
+            format!("{:.2} ms", ns as f64 / 1_000_000.0)
+        } else if ns >= 1_000 {
+            format!("{:.2} µs", ns as f64 / 1_000.0)
+        } else {
+            format!("{} ns", ns)
+        }
+    }
+
+    // Helper function to get HTTP status description
+    fn status_description(code: u16) -> &'static str {
+        match code {
+            200 => "OK",
+            201 => "Created",
+            204 => "No Content",
+            301 => "Moved Permanently",
+            302 => "Found",
+            304 => "Not Modified",
+            400 => "Bad Request",
+            401 => "Unauthorized",
+            403 => "Forbidden",
+            404 => "Not Found",
+            405 => "Method Not Allowed",
+            500 => "Internal Server Error",
+            502 => "Bad Gateway",
+            503 => "Service Unavailable",
+            504 => "Gateway Timeout",
+            _ => "Unknown",
+        }
+    }
+
     println!("\n=== Load Test Results ===");
     println!("URL: {}", url);
     println!("Duration: {:.2}s", duration_secs);
@@ -232,25 +269,44 @@ fn print_results(result: &TestResult, url: &str) {
         result.total_bytes as f64 / (1024.0 * 1024.0)
     );
     println!("\nLatency:");
-    println!("  Average: {} ns", histogram.mean() as u64);
-    println!("  Min: {} ns", histogram.min());
-    println!("  Max: {} ns", histogram.max());
-    println!("  P50: {} ns", histogram.value_at_quantile(0.5));
-    println!("  P90: {} ns", histogram.value_at_quantile(0.9));
-    println!("  P95: {} ns", histogram.value_at_quantile(0.95));
-    println!("  P99: {} ns", histogram.value_at_quantile(0.99));
+    println!("  Average: {}", format_latency_ns(histogram.mean() as u64));
+    println!("  Min:     {}", format_latency_ns(histogram.min()));
+    println!("  Max:     {}", format_latency_ns(histogram.max()));
+    println!(
+        "  P50:     {}",
+        format_latency_ns(histogram.value_at_quantile(0.5))
+    );
+    println!(
+        "  P90:     {}",
+        format_latency_ns(histogram.value_at_quantile(0.9))
+    );
+    println!(
+        "  P95:     {}",
+        format_latency_ns(histogram.value_at_quantile(0.95))
+    );
+    println!(
+        "  P99:     {}",
+        format_latency_ns(histogram.value_at_quantile(0.99))
+    );
 
     println!("\nStatus Codes:");
     let mut codes: Vec<_> = status_codes.iter().collect();
     codes.sort_by_key(|&(k, _)| k);
     for (code, count) in codes {
-        println!("  {}: {}", code, count);
+        let percent = (*count as f64 / total_requests as f64) * 100.0;
+        println!(
+            "  {} {} - {} ({:.1}%)",
+            code,
+            status_description(*code),
+            count,
+            percent
+        );
     }
 
     if !result.errors.is_empty() {
         println!("\nErrors:");
         for err in &result.errors {
-            println!("  {}: {}", err.message, err.count);
+            println!("  [{}] {}", err.count, err.message);
         }
     }
 }

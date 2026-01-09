@@ -124,7 +124,7 @@ async fn start_handler(
         }
 
         // Run the test
-        let test_result = run_load_test(run_config).await;
+        let test_result = run_load_test(run_config, None).await;
         let Ok(result) = test_result else {
             return;
         };
